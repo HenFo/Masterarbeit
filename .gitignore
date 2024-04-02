@@ -1,0 +1,5 @@
+meld/**/*
+models/**/*
+experiments/**/*
+Schmierblatt.ipynb
+*/**/__pycache__
