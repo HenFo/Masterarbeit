@@ -100,9 +100,9 @@ class MmLlamaConfig(PretrainedConfig):
         self.pad_token_id = pad_token_id
     
 
-class MMLLaMA(nn.Module):
+class MmLlama(nn.Module):
     def __init__(self, config: MmLlamaConfig) -> None:
-        super(MMLLaMA, self).__init__()
+        super(MmLlama, self).__init__()
         self.config = config
         self.llama = AutoModelForCausalLM.from_pretrained(config.llm_config._name_or_path)
         self.llama.resize_token_embeddings(self.config.audio_token_id + 1, 8)
@@ -240,7 +240,7 @@ if __name__ == "__main__":
         "/home/fock/code/MultiModalInstructERC/models/language/adapter/InstructERC_unbalanced",
     )
 
-    m = MMLLaMA(cMM)
+    m = MmLlama(cMM)
     inpA = torch.zeros((1, 32000))
     inpT = tT(
         '<audio> Now you are expert of sentiment and emotional analysis. The following conversation noted between \'### ###\' involves several speaker. ### Speaker_0: "Why do all youre coffee mugs have numbers on the bottom?" \t Speaker_1: "Oh. Thats so Monica can keep track. That way if one on them is missing, she can be like, \'Wheres number 27?!" ### Please select the emotional label of <Speaker_1: "Oh. Thats so Monica can keep track. That way if one on them is missing, she can be like, \'Wheres number 27?!"> from <surprise, anger, neutral, joy, sadness, fear, disgust>:',

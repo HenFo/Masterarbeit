@@ -154,27 +154,41 @@ class MeldDataset(Dataset):
         self.emotions = "surprise, anger, neutral, joy, sadness, fear, disgust"
         self.speaker = "Speaker_0, Speaker_1, Speaker_2, Speaker_3, Speaker_4, Speaker_5, Speaker_6, Speaker_7"
         self.ds_sample_rate = self._guess_samplerate()
-        self.resampler = AT.Resample(orig_freq=self.ds_sample_rate, new_freq=self.target_sample_rate)
+        self.resampler = AT.Resample(
+            orig_freq=self.ds_sample_rate, new_freq=self.target_sample_rate
+        )
 
-    def __getitem__(self, index):
+    def __getitem__(self, index) -> Tuple[Tuple[torch.Tensor, str], str]:
         history = self._get_history(index)
-        history = history.iloc[-self.window:]
+        history = history.iloc[-self.window :]
+        audio = None
+        text = None
+
         if self.task == "normal":
-            return self._get_normal_input(history)
+            audio, text = self._get_normal_input(history)
         if self.task == "emotion":
-            return self._generate_emotion_prediction(history)
+            text = self._generate_emotion_prediction(history)
         if self.task == "mixed":
-            norm = self._get_normal_input(history)
+            audio, norm = self._get_normal_input(history)
             emot = self._generate_emotion_prediction(history)
-            return {"input": norm["input"] + "***" + emot["input"], "target": norm["target"]}
+            text = {
+                "input": norm["input"] + "***" + emot["input"],
+                "target": norm["target"],
+            }
         if self.task == "speaker":
-            return self._generate_speaker_ident_task(history)
+            text = self._generate_speaker_ident_task(history)
+        
+        return (audio, text["input"]), text["target"]
 
     def _get_normal_input(self, history):
         corrupt = history.iloc[-1]["corrupt"]
+        audio = None
+        text = None
         if corrupt:
-            return self._generate_input(history, include_audio=False)
-        return self._generate_input(history)
+            text = self._generate_input(history, include_audio=False)
+        audio = self._get_audio(history.iloc[-1])
+        text = self._generate_input(history)
+        return audio, text
 
     def _get_history(self, index) -> pd.DataFrame:
         target = self.dataset.iloc[index, :]
@@ -183,24 +197,22 @@ class MeldDataset(Dataset):
             & (self.dataset["Utterance_ID"] <= target["Utterance_ID"])
         ]
         return history
-    
-    def _get_audio(self, index) -> torch.Tensor:
-        row = self.dataset.iloc[index, :]
+
+    def _get_audio(self, row) -> torch.Tensor:
         path = self._build_path(row)
         wavs, _ = torchaudio.load(path)
         wav = wavs[torch.argmax(torch.std(wavs, dim=1))]
         wav = self.resampler(wav)
-        y = MeldAudioDataset.label2id(row["Emotion"])
 
-        return wav.numpy(), y
-    
+        return wav
+
     def _build_path(self, row: pd.Series) -> str:
         filename = f"dia{row['Dialogue_ID']}_utt{row['Utterance_ID']}.mp4"
         path = os.path.join(
             os.path.dirname(self.dataset_path), "audio", self.mode, filename
         )
         return path
-    
+
     def _mark_audio_corrupt(self, df: pd.DataFrame) -> pd.DataFrame:
         df["corrupt"] = False
         for i, row in tqdm(
@@ -238,9 +250,7 @@ class MeldDataset(Dataset):
         df["Speaker"] = df["Speaker"].apply(lambda name: f"Speaker_{name_to_id[name]}")
         return df
 
-    def _generate_speaker_ident_task(
-        self, dialog: pd.DataFrame
-    ) -> dict:
+    def _generate_speaker_ident_task(self, dialog: pd.DataFrame) -> dict:
         prompts = dialog["Speaker"] + ': "' + dialog["Utterance"] + '"'
         dialog_chain = " \t ".join(prompts.iloc[:-1])
         target = dialog.iloc[-1]
@@ -248,9 +258,7 @@ class MeldDataset(Dataset):
         prompt = f"Now you are expert of sentiment and emotional analysis. The following conversation noted between '### ###' involves several speaker. ### {dialog_chain} ### {instruction}"
         return {"input": prompt, "target": target["Speaker"]}
 
-    def _generate_emotion_prediction(
-        self, dialog: pd.DataFrame
-    ) -> dict:
+    def _generate_emotion_prediction(self, dialog: pd.DataFrame) -> dict:
         if len(dialog) > 1:
             prompts = dialog["Speaker"] + ': "' + dialog["Utterance"] + '"'
             dialog_chain = " \t ".join(prompts.iloc[:-1])
@@ -291,4 +299,3 @@ if __name__ == "__main__":
         ds.task = t
         print(ds[6])
         print("########################\n")
-
