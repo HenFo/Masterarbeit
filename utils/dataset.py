@@ -10,44 +10,59 @@ from tqdm.auto import tqdm
 
 
 class MeldAudioDataset(Dataset):
-    def __init__(self, dataset_path:str, mode, target_sample_rate:int = 16000, window:int = 5, data_percentage:float = 1.0, keep_order:bool = False):
+    def __init__(
+        self,
+        dataset_path: str,
+        mode,
+        target_sample_rate: int = 16000,
+        window: int = 5,
+        data_percentage: float = 1.0,
+        keep_order: bool = False,
+    ):
         assert mode in ["train", "dev", "test"]
         self.mode = mode
         self.dataset_path = dataset_path
         self.target_sample_rate = target_sample_rate
-        self.dataset:pd.DataFrame = MeldAudioDataset.prepare_dataset(dataset_path, window, data_percentage, keep_order)
+        self.dataset: pd.DataFrame = MeldAudioDataset.prepare_dataset(
+            dataset_path, window, data_percentage, keep_order
+        )
         self.dataset = self.clean_dataset(self.dataset)
         self.ds_sample_rate = self.guess_samplerate()
-        self.resampler = AT.Resample(orig_freq=self.ds_sample_rate, new_freq=self.target_sample_rate)
+        self.resampler = AT.Resample(
+            orig_freq=self.ds_sample_rate, new_freq=self.target_sample_rate
+        )
 
     def __len__(self):
         return len(self.dataset)
-    
+
     def __getitem__(self, index) -> Tuple[np.ndarray, int]:
         row = self.dataset.iloc[index, :]
         path = self.build_path(row)
         wavs, _ = torchaudio.load(path)
-        wav =  wavs[torch.argmax(torch.std(wavs, dim=1))]
+        wav = wavs[torch.argmax(torch.std(wavs, dim=1))]
         wav = self.resampler(wav)
         y = MeldAudioDataset.label2id(row["Emotion"])
 
         return wav.numpy(), y
-
 
     def guess_samplerate(self) -> int:
         first_row = self.dataset.iloc[0]
         path = self.build_path(first_row)
         _, sr = torchaudio.load(path)
         return sr
-    
-    def build_path(self, row:pd.Series) -> str:
+
+    def build_path(self, row: pd.Series) -> str:
         filename = f"dia{row['Dialogue_ID']}_utt{row['Utterance_ID']}.mp4"
-        path = os.path.join(os.path.dirname(self.dataset_path), "audio", self.mode, filename)
+        path = os.path.join(
+            os.path.dirname(self.dataset_path), "audio", self.mode, filename
+        )
         return path
-    
-    def clean_dataset(self, df:pd.DataFrame) -> pd.DataFrame:
+
+    def clean_dataset(self, df: pd.DataFrame) -> pd.DataFrame:
         corrupted_audio = []
-        for i, row in tqdm(df.iterrows(), desc=f"Cleaning {self.mode} dataset", total=len(df)):
+        for i, row in tqdm(
+            df.iterrows(), desc=f"Cleaning {self.mode} dataset", total=len(df)
+        ):
             path = self.build_path(row)
             try:
                 info = torchaudio.info(path)
@@ -62,24 +77,30 @@ class MeldAudioDataset(Dataset):
 
     @classmethod
     def get_labels(cls) -> List[str]:
-        return ['sadness', 'surprise', 'neutral', 'joy', 'anger', 'disgust', 'fear']
-    
+        return ["sadness", "surprise", "neutral", "joy", "anger", "disgust", "fear"]
+
     @classmethod
-    def label2id(cls, label:str) -> int:
+    def label2id(cls, label: str) -> int:
         return cls.get_labels().index(label)
-    
+
     @classmethod
-    def id2label(cls, id:int) -> str:
+    def id2label(cls, id: int) -> str:
         return cls.get_labels()[id]
 
     @classmethod
-    def transform_speaker_to_id(cls, df:pd.DataFrame) -> pd.DataFrame:
-        name_to_id = {name:i for i, name in enumerate(df["Speaker"].unique())}
+    def transform_speaker_to_id(cls, df: pd.DataFrame) -> pd.DataFrame:
+        name_to_id = {name: i for i, name in enumerate(df["Speaker"].unique())}
         df["Speaker"] = df["Speaker"].apply(lambda name: f"Speaker_{name_to_id[name]}")
         return df
 
     @classmethod
-    def prepare_dataset(cls, path:str, window:int = 5, data_percentage: float = 1.0, keep_order: bool = False) -> pd.DataFrame:
+    def prepare_dataset(
+        cls,
+        path: str,
+        window: int = 5,
+        data_percentage: float = 1.0,
+        keep_order: bool = False,
+    ) -> pd.DataFrame:
         ds = pd.read_csv(path, index_col=0).reset_index(drop=True)
         ds = ds.sample(frac=data_percentage, replace=False)
         if keep_order:
@@ -87,19 +108,187 @@ class MeldAudioDataset(Dataset):
         ds["Utterance"] = ds["Utterance"].str.replace("’", "")
         ds["Utterance"] = ds["Utterance"].str.replace("‘", "'")
         ds = cls.transform_speaker_to_id(ds)
-        ds = ds.groupby("Dialogue_ID").apply(cls.transform_speaker_to_id).reset_index(drop=True)
+        ds = (
+            ds.groupby("Dialogue_ID")
+            .apply(cls.transform_speaker_to_id)
+            .reset_index(drop=True)
+        )
         # ds["prompt"] = ds["Speaker"] + ": \"" + ds["Utterance"] + "\""
-        # ds = MeldAudioDataset.create_window_view(ds, window)
+        ds = MeldAudioDataset.create_window_view(ds, window)
         return ds
 
     @classmethod
-    def create_window_view(cls, df:pd.DataFrame, window:int = 5) -> List[pd.DataFrame]:
+    def create_window_view(
+        cls, df: pd.DataFrame, window: int = 5
+    ) -> List[pd.DataFrame]:
         groups = df.groupby("Dialogue_ID")
         dialogue_windows = []
         for _, group in groups:
             for i, _ in enumerate(group.sort_values("Utterance_ID").iterrows()):
-                start = max(0, i-window)
-                end = i+1
+                start = max(0, i - window)
+                end = i + 1
                 history = group.iloc[start:end]
                 dialogue_windows.append(history)
         return dialogue_windows
+
+
+class MeldDataset(Dataset):
+    def __init__(
+        self,
+        dataset_path: str,
+        mode,
+        task: str = "normal",
+        target_sample_rate: int = 16000,
+        window: int = 5,
+        data_percentage: float = 1.0,
+    ):
+        assert mode in ["train", "test"]
+        assert task in ["normal", "speaker", "emotion", "mixed"]
+        self.mode = mode
+        self.dataset_path = dataset_path
+        self.target_sample_rate = target_sample_rate
+        self.window = window
+        self.task = task
+        self.dataset: pd.DataFrame = self._prepare_dataset(dataset_path)
+        self._mark_audio_corrupt(self.dataset)
+        self.emotions = "surprise, anger, neutral, joy, sadness, fear, disgust"
+        self.speaker = "Speaker_0, Speaker_1, Speaker_2, Speaker_3, Speaker_4, Speaker_5, Speaker_6, Speaker_7"
+        self.ds_sample_rate = self._guess_samplerate()
+        self.resampler = AT.Resample(orig_freq=self.ds_sample_rate, new_freq=self.target_sample_rate)
+
+    def __getitem__(self, index):
+        history = self._get_history(index)
+        history = history.iloc[-self.window:]
+        if self.task == "normal":
+            return self._get_normal_input(history)
+        if self.task == "emotion":
+            return self._generate_emotion_prediction(history)
+        if self.task == "mixed":
+            norm = self._get_normal_input(history)
+            emot = self._generate_emotion_prediction(history)
+            return {"input": norm["input"] + "***" + emot["input"], "target": norm["target"]}
+        if self.task == "speaker":
+            return self._generate_speaker_ident_task(history)
+
+    def _get_normal_input(self, history):
+        corrupt = history.iloc[-1]["corrupt"]
+        if corrupt:
+            return self._generate_input(history, include_audio=False)
+        return self._generate_input(history)
+
+    def _get_history(self, index) -> pd.DataFrame:
+        target = self.dataset.iloc[index, :]
+        history = self.dataset[
+            (self.dataset["Dialogue_ID"] == target["Dialogue_ID"])
+            & (self.dataset["Utterance_ID"] <= target["Utterance_ID"])
+        ]
+        return history
+    
+    def _get_audio(self, index) -> torch.Tensor:
+        row = self.dataset.iloc[index, :]
+        path = self._build_path(row)
+        wavs, _ = torchaudio.load(path)
+        wav = wavs[torch.argmax(torch.std(wavs, dim=1))]
+        wav = self.resampler(wav)
+        y = MeldAudioDataset.label2id(row["Emotion"])
+
+        return wav.numpy(), y
+    
+    def _build_path(self, row: pd.Series) -> str:
+        filename = f"dia{row['Dialogue_ID']}_utt{row['Utterance_ID']}.mp4"
+        path = os.path.join(
+            os.path.dirname(self.dataset_path), "audio", self.mode, filename
+        )
+        return path
+    
+    def _mark_audio_corrupt(self, df: pd.DataFrame) -> pd.DataFrame:
+        df["corrupt"] = False
+        for i, row in tqdm(
+            df.iterrows(), desc=f"Cleaning {self.mode} dataset", total=len(df)
+        ):
+            path = self._build_path(row)
+            try:
+                info = torchaudio.info(path)
+                if info.num_frames > 2000:
+                    tqdm.write(f"Too long audio file: {path}")
+                    df.loc[i, "corrupt"] = True
+            except RuntimeError:
+                tqdm.write(f"Corrupted audio file: {path}")
+                df.loc[i, "corrupt"] = True
+
+    def _guess_samplerate(self) -> int:
+        first_row = self.dataset.iloc[0]
+        path = self._build_path(first_row)
+        _, sr = torchaudio.load(path)
+        return sr
+
+    def _prepare_dataset(self, path) -> pd.DataFrame:
+        ds = pd.read_csv(path, index_col=0).reset_index(drop=True)
+        ds["Utterance"] = ds["Utterance"].str.replace("’", "")
+        ds["Utterance"] = ds["Utterance"].str.replace("‘", "'")
+        ds = (
+            ds.groupby("Dialogue_ID")
+            .apply(self._transform_speaker_to_id)
+            .reset_index(drop=True)
+        )
+        return ds
+
+    def _transform_speaker_to_id(self, df: pd.DataFrame) -> pd.DataFrame:
+        name_to_id = {name: i for i, name in enumerate(df["Speaker"].unique())}
+        df["Speaker"] = df["Speaker"].apply(lambda name: f"Speaker_{name_to_id[name]}")
+        return df
+
+    def _generate_speaker_ident_task(
+        self, dialog: pd.DataFrame
+    ) -> dict:
+        prompts = dialog["Speaker"] + ': "' + dialog["Utterance"] + '"'
+        dialog_chain = " \t ".join(prompts.iloc[:-1])
+        target = dialog.iloc[-1]
+        instruction = f"Please select the Speaker label of the next utterance <Speaker: {target['Utterance']}> from <{self.speaker}>:"
+        prompt = f"Now you are expert of sentiment and emotional analysis. The following conversation noted between '### ###' involves several speaker. ### {dialog_chain} ### {instruction}"
+        return {"input": prompt, "target": target["Speaker"]}
+
+    def _generate_emotion_prediction(
+        self, dialog: pd.DataFrame
+    ) -> dict:
+        if len(dialog) > 1:
+            prompts = dialog["Speaker"] + ': "' + dialog["Utterance"] + '"'
+            dialog_chain = " \t ".join(prompts.iloc[:-1])
+            target = dialog.iloc[-1]
+            instruction = f"Based on the above historical utterances, next utterance is spoken by <{target['Speaker']}>, please predict the emotion states of <{target['Speaker']}> from <{self.emotions}>:"
+            prompt = f"Now you are expert of sentiment and emotional analysis. The following conversation noted between '### ###' involves several speaker. ### {dialog_chain} ### {instruction}"
+            return {"input": prompt, "target": target["Emotion"]}
+
+        return self._generate_input(dialog, self.emotions)
+
+    def _generate_input(
+        self,
+        dialog: pd.DataFrame,
+        include_audio: bool = True,
+        include_text: bool = True,
+    ) -> dict:
+        prompts = dialog["Speaker"] + ': "' + dialog["Utterance"] + '"'
+        dialog_chain = " \t ".join(prompts)
+        target = dialog.iloc[-1]
+        instruction = f"Please select the emotional label of <{target['Speaker']}: "
+        if include_audio:
+            instruction += "<audio>"
+        if include_text:
+            instruction += f"\"{target['Utterance']}\""
+        instruction += f"> from <{self.emotions}>:"
+
+        prompt = f"Now you are expert of sentiment and emotional analysis. The following conversation noted between '### ###' involves several speaker. ### {dialog_chain} ### {instruction}"
+        return {"input": prompt, "target": target["Emotion"]}
+
+
+if __name__ == "__main__":
+    PATH = "/home/fock/code/MultiModalInstructERC/meld/test_sent_emo.csv"
+    tasks = ["normal", "speaker", "emotion", "mixed"]
+    ds = MeldDataset(PATH, mode="test", window=10)
+    print(ds.dataset[ds.dataset["corrupt"]])
+    for t in tasks:
+        print(t)
+        ds.task = t
+        print(ds[6])
+        print("########################\n")
+

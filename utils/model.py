@@ -247,4 +247,5 @@ if __name__ == "__main__":
         return_tensors="pt",
     )
 
-    m.generate(acoustic=inpA, **inpT)
+    r = m.generate(acoustic=inpA, **inpT)
+    print(tT.batch_decode(r, skip_special_tokens=True))
