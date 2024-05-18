@@ -1,3 +1,3 @@
 from .collator import DynamicPadCollator
 from .dataset import MeldAudioDataset
-from .model import MyEmotionModel
+from .model import AcousticEmotionRecogniser
