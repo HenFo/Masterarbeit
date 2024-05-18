@@ -7,7 +7,7 @@ import numpy as np
 from accelerate import Accelerator
 from tqdm.auto import tqdm
 from sklearn.metrics import f1_score
-from utils import MeldAudioDataset, DynamicPadCollator, MyEmotionModel
+from utils import MeldAudioDataset, DynamicPadCollator, AcousticEmotionRecogniser
 
 # %%
 MODEL = "/home/fock/code/MultiModalInstructERC/models/acoustic/wav2vec2/wav2vec2-large-robust-12-ft-emotion-msp-dim"
@@ -25,7 +25,7 @@ def train(mixed_precision="bf16"):
     accelerator = Accelerator(mixed_precision=mixed_precision, gradient_accumulation_steps=GRAD_ACC_STEPS)
     config = AutoConfig.from_pretrained(MODEL)
     processor = AutoProcessor.from_pretrained(MODEL)
-    model = MyEmotionModel.from_pretrained(MODEL, config=config, ignore_mismatched_sizes=True, num_labels=len(MeldAudioDataset.get_labels()))
+    model = AcousticEmotionRecogniser.from_pretrained(MODEL, config=config, ignore_mismatched_sizes=True, num_labels=len(MeldAudioDataset.get_labels()))
     model.freeze_encoder()
 
     train_dataset = MeldAudioDataset(DS_TRAIN_PATH, "train", data_percentage=1)

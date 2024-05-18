@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from accelerate import Accelerator
 from tqdm.auto import tqdm
 from sklearn.metrics import f1_score
-from utils import MeldAudioDataset, DynamicPadCollator, MyEmotionModel
+from utils import MeldAudioDataset, DynamicPadCollator, AcousticEmotionRecogniser
 
 
 
@@ -19,7 +19,7 @@ def eval():
 
     config = AutoConfig.from_pretrained(MODEL)
     processor = AutoProcessor.from_pretrained(MODEL)
-    model = MyEmotionModel.from_pretrained(MODEL_PATH, config=config, num_labels=len(MeldAudioDataset.get_labels()))
+    model = AcousticEmotionRecogniser.from_pretrained(MODEL_PATH, config=config, num_labels=len(MeldAudioDataset.get_labels()))
 
     test_dataset = MeldAudioDataset(DS_TEST_PATH, "test", keep_order=True)
 
