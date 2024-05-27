@@ -15,42 +15,57 @@
 
 from typing import List, Optional, Union
 
+import numpy as np
 import torch
 from torch import TensorType
-from transformers import BatchFeature, ProcessorMixin
+from transformers import BatchFeature
 
 
-class MmLlamaProcessor(ProcessorMixin):
+class MmLlamaProcessor:
     """
     Processor class for MMLLaMA.
     Adapted from the Llava Processor implementation
     """
 
-
     def __init__(self, audio_processor=None, tokenizer=None):
-        super().__init__(audio_processor, tokenizer)
+        # super().__init__(feature_extractor=audio_processor, tokenizer=tokenizer)
         self.audio_processor = audio_processor
         self.tokenizer = tokenizer
 
     def __call__(
         self,
-        text: str = None,
-        acoustic: torch.Tensor = None,
+        text: List[str] = None,
+        acoustic: List[torch.Tensor] = None,
         sampling_rate: int = 16000,
         padding: Union[bool, str] = False,
         truncation: Union[bool, str] = None,
         max_length=None,
         return_tensors: Optional[Union[str, TensorType]] = "pt",
+        tokenizer_args: dict = {},
     ) -> BatchFeature:
         if acoustic is not None:
-            audio_features = self.audio_processor(acoustic, sampling_rate=sampling_rate, return_tensors=return_tensors)
+            acoustic = list(map(lambda x: x if x is not None else np.zeros((1000,)), acoustic))
+            audio_features = self.audio_processor(
+                acoustic, sampling_rate=sampling_rate, return_tensors=return_tensors, padding=True
+            )
+            empty_batch_indices, *_ = torch.where(torch.all(audio_features["input_values"] == 0, dim=-1))
+            audio_features["attention_mask"][empty_batch_indices,:] = 0
+
         else:
             audio_features = None
-        text_inputs = self.tokenizer(
-            text, return_tensors=return_tensors, padding=padding, truncation=truncation, max_length=max_length
-        )
+        if text is not None:
+            text_inputs = self.tokenizer(
+                text,
+                return_tensors=return_tensors,
+                padding=padding,
+                truncation=truncation,
+                max_length=max_length,
+                **tokenizer_args,
+            )
+        else:
+            text_inputs = None
 
-        return BatchFeature(data={**text_inputs, "acoustic": audio_features})
+        return BatchFeature(data={"text": text_inputs, "acoustic": audio_features})
 
     # Copied from transformers.models.clip.processing_clip.CLIPProcessor.batch_decode with CLIP->Llama
     def batch_decode(self, *args, **kwargs):

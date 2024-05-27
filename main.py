@@ -9,6 +9,7 @@ from utils import (
 )
 from accelerate import Accelerator
 from dataclasses import dataclass
+import torch
 
 LANGUAGE_MODEL = "/home/fock/code/MultiModalInstructERC/models/language/LLaMA2"
 LORA_ADAPTER = "/home/fock/code/MultiModalInstructERC/models/language/adapter/InstructERC_unbalanced"
@@ -31,23 +32,26 @@ class Args:
     gradient_accumulation_steps: int = 1
     mixed_precision: str = "bf16"
     task: str = "normal"
-    batch_size: int = 1
+    batch_size: int = 3
 
 
 args = Args(
-    gradient_accumulation_steps=8,
+    batch_size=2,
+    gradient_accumulation_steps=1,
     llm_id=LANGUAGE_MODEL,
     acoustic_id=ACOUSTIC_MODEL,
     output_path=OUTPUT_PATH,
     train_dataset=DS_TRAIN_PATH,
+    test_dataset=DS_TEST_PATH,
+    dev_dataset=DS_DEV_PATH
 )
 
 
 def train():
-    accelerator = Accelerator(
-        mixed_precision=args.mixed_precision,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-    )
+    # accelerator = Accelerator(
+    #     mixed_precision=args.mixed_precision,
+    #     gradient_accumulation_steps=args.gradient_accumulation_steps,
+    # )
 
     # Load configurations
     llm_config = AutoConfig.from_pretrained(args.llm_id)
@@ -70,23 +74,31 @@ def train():
         ac_config,
         audio_token_id,
         tokenizer.pad_token_id,
+        LORA_ADAPTER
     )
 
     # get model
-    # model = MmLlama(config)
+    model = MmLlama(config)
 
     # setup datasets
     # TODO Zu Trainingsdatensatz ändern !!!!!!!!!!!!!!!!!!!!!!
-    train_dataset = MeldDataset(args.test_dataset, mode="train", task=args.task)
+    train_dataset = MeldDataset(args.test_dataset, mode="test", task=args.task)
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        num_workers=8,
-        collate_fn=SequenceClassificationCollator(processor),
+        num_workers=1,
+        collate_fn=SequenceClassificationCollator(processor, mode="dev"),
     )
 
-    print(next(iter(train_dataloader)))
+    x = next(iter(train_dataloader))
+
+    print(x)
+    with torch.no_grad():
+        y = model.generate(**x)
+    
+    print(tokenizer.batch_decode(y))
+
 
 
 if __name__ == "__main__":

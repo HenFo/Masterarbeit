@@ -150,13 +150,16 @@ class MeldDataset(Dataset):
         self.window = window
         self.task = task
         self.dataset: pd.DataFrame = self._prepare_dataset(dataset_path)
-        self._mark_audio_corrupt(self.dataset)
+        # self._mark_audio_corrupt(self.dataset)
         self.emotions = "surprise, anger, neutral, joy, sadness, fear, disgust"
         self.speaker = "Speaker_0, Speaker_1, Speaker_2, Speaker_3, Speaker_4, Speaker_5, Speaker_6, Speaker_7"
         self.ds_sample_rate = self._guess_samplerate()
         self.resampler = AT.Resample(
             orig_freq=self.ds_sample_rate, new_freq=self.target_sample_rate
         )
+
+    def __len__(self):
+        return len(self.dataset)
 
     def __getitem__(self, index) -> Tuple[Tuple[torch.Tensor, str], str]:
         history = self._get_history(index)
@@ -181,13 +184,14 @@ class MeldDataset(Dataset):
         return (audio, text["input"]), text["target"]
 
     def _get_normal_input(self, history):
-        corrupt = history.iloc[-1]["corrupt"]
+        corrupt = history.iloc[-1].get("corrupt", False)
         audio = None
         text = None
         if corrupt:
             text = self._generate_input(history, include_audio=False)
-        audio = self._get_audio(history.iloc[-1])
-        text = self._generate_input(history)
+        else:
+            audio = self._get_audio(history.iloc[-1])
+            text = self._generate_input(history)
         return audio, text
 
     def _get_history(self, index) -> pd.DataFrame:
@@ -204,7 +208,7 @@ class MeldDataset(Dataset):
         wav = wavs[torch.argmax(torch.std(wavs, dim=1))]
         wav = self.resampler(wav)
 
-        return wav
+        return wav.numpy()
 
     def _build_path(self, row: pd.Series) -> str:
         filename = f"dia{row['Dialogue_ID']}_utt{row['Utterance_ID']}.mp4"
