@@ -37,6 +37,7 @@ class SequenceClassificationCollator(object):
     def _prepare_dev_data(self, batch):
         acoustics = [a for (a, _), _ in batch]
         texts = [t for (_, t), _ in batch]
+        labels = [l for _, l in batch]
 
         processed_inputs = self.processor(
             text=texts, acoustic=acoustics, sampling_rate=self.sample_rate, padding=True, return_tensors="pt"
@@ -52,8 +53,8 @@ class SequenceClassificationCollator(object):
 
         return {
             "text": text_inputs,
-            "acoustic": acoustic_inputs
-        }
+            "acoustic": acoustic_inputs,
+        }, labels
 
     def _prepare_train_data(self, batch):
         # [(audio, text), target]
@@ -62,7 +63,7 @@ class SequenceClassificationCollator(object):
         labels = [l for _, l in batch]
 
         processed_inputs = self.processor(
-            text=texts, acoustic=acoustics, sampling_rate=self.sample_rate
+            text=texts, acoustic=acoustics, sampling_rate=self.sample_rate, return_tensors=None
         )
         processed_labels = self.processor(
             text=labels, tokenizer_args={"add_special_tokens": False}
@@ -74,8 +75,6 @@ class SequenceClassificationCollator(object):
             processed_labels["text"],
         )
 
-        for k in acoustic_inputs:
-            acoustic_inputs[k] = torch.Tensor(np.asarray(acoustic_inputs[k]))
 
         # merge text with label
         all_input_ids = []
@@ -101,14 +100,14 @@ class SequenceClassificationCollator(object):
             )
             attention_mask = [0] * len(padding) + [1] * len(input_ids)
             all_attention_masks.append(attention_mask)
-            all_input_ids[i] = padding + all_input_ids[i]
-            all_labels[i] = [-100] * len(padding) + all_labels[i]
+            all_input_ids[i] = padding + input_ids
+            all_labels[i] = [-100] * len(padding) + labels
 
         return {
             "text": {
-                "input_ids": torch.Tensor(all_input_ids).long(),
-                "attention_mask": torch.Tensor(all_attention_masks).long(),
-                "labels": torch.Tensor(all_labels).long(),
+                "input_ids": torch.Tensor(all_input_ids).long().contiguous(),
+                "attention_mask": torch.Tensor(all_attention_masks).long().contiguous(),
+                "labels": torch.Tensor(all_labels).long().contiguous(),
             },
             "acoustic": acoustic_inputs,
         }

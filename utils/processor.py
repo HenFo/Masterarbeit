@@ -40,13 +40,21 @@ class MmLlamaProcessor:
         padding: Union[bool, str] = False,
         truncation: Union[bool, str] = None,
         max_length=None,
-        return_tensors: Optional[Union[str, TensorType]] = "pt",
+        return_tensors: Optional[Union[str, TensorType]] = None,
         tokenizer_args: dict = {},
     ) -> BatchFeature:
         if acoustic is not None:
-            acoustic = list(map(lambda x: x if x is not None else np.zeros((1000,)), acoustic))
+            def clean_audio(acoustic: np.ndarray):
+                if acoustic is None:
+                    return np.zeros((4000,))
+                audio_length = acoustic.shape[0]
+                if audio_length < 4000:
+                    return np.concatenate((acoustic, np.zeros((4000-audio_length,))))
+                return acoustic
+            
+            acoustic = list(map(clean_audio, acoustic))
             audio_features = self.audio_processor(
-                acoustic, sampling_rate=sampling_rate, return_tensors=return_tensors, padding=True
+                acoustic, sampling_rate=sampling_rate, return_tensors="pt", padding=True
             )
             empty_batch_indices, *_ = torch.where(torch.all(audio_features["input_values"] == 0, dim=-1))
             audio_features["attention_mask"][empty_batch_indices,:] = 0

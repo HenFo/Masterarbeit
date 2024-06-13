@@ -4,9 +4,10 @@ from torch.utils.data import Dataset
 import torchaudio.transforms as AT
 import numpy as np
 import pandas as pd
-from typing import List, Tuple
+from typing import List, Tuple, Union
 import os
 from tqdm.auto import tqdm
+from functools import lru_cache
 
 
 class MeldAudioDataset(Dataset):
@@ -113,9 +114,21 @@ class MeldAudioDataset(Dataset):
             .apply(cls.transform_speaker_to_id)
             .reset_index(drop=True)
         )
+        ds["Emotion"] = ds["Emotion"].str.apply(cls.meld2instruct)
         # ds["prompt"] = ds["Speaker"] + ": \"" + ds["Utterance"] + "\""
         ds = MeldAudioDataset.create_window_view(ds, window)
         return ds
+    
+    @classmethod
+    def meld2instruct(cls, label:str) -> str:
+        if label == "anger":
+            return "angry"
+        if label == "joy":
+            return "joyful"
+        if label == "sadness":
+            return "sad"
+        return label
+
 
     @classmethod
     def create_window_view(
@@ -132,25 +145,28 @@ class MeldAudioDataset(Dataset):
         return dialogue_windows
 
 
+
+
 class MeldDataset(Dataset):
     def __init__(
         self,
         dataset_path: str,
         mode,
         task: str = "normal",
+        mix_rate: float = 0.1,
         target_sample_rate: int = 16000,
         window: int = 5,
         data_percentage: float = 1.0,
     ):
-        assert mode in ["train", "test"]
+        assert mode in ["train", "dev", "test"]
         assert task in ["normal", "speaker", "emotion", "mixed"]
         self.mode = mode
         self.dataset_path = dataset_path
         self.target_sample_rate = target_sample_rate
         self.window = window
         self.task = task
+        self.mix_rate = mix_rate
         self.dataset: pd.DataFrame = self._prepare_dataset(dataset_path)
-        # self._mark_audio_corrupt(self.dataset)
         self.emotions = "surprise, anger, neutral, joy, sadness, fear, disgust"
         self.speaker = "Speaker_0, Speaker_1, Speaker_2, Speaker_3, Speaker_4, Speaker_5, Speaker_6, Speaker_7"
         self.ds_sample_rate = self._guess_samplerate()
@@ -172,19 +188,18 @@ class MeldDataset(Dataset):
         if self.task == "emotion":
             text = self._generate_emotion_prediction(history)
         if self.task == "mixed":
-            audio, norm = self._get_normal_input(history)
-            emot = self._generate_emotion_prediction(history)
-            text = {
-                "input": norm["input"] + "***" + emot["input"],
-                "target": norm["target"],
-            }
+            if np.random.random() > self.mix_rate:
+                audio, text = self._get_normal_input(history)
+            else:
+                text = self._generate_emotion_prediction(history)
+           
         if self.task == "speaker":
             text = self._generate_speaker_ident_task(history)
         
         return (audio, text["input"]), text["target"]
 
     def _get_normal_input(self, history):
-        corrupt = history.iloc[-1].get("corrupt", False)
+        corrupt = self._check_audio_corruption(history.iloc[-1].name)
         audio = None
         text = None
         if corrupt:
@@ -217,20 +232,18 @@ class MeldDataset(Dataset):
         )
         return path
 
-    def _mark_audio_corrupt(self, df: pd.DataFrame) -> pd.DataFrame:
-        df["corrupt"] = False
-        for i, row in tqdm(
-            df.iterrows(), desc=f"Cleaning {self.mode} dataset", total=len(df)
-        ):
-            path = self._build_path(row)
-            try:
-                info = torchaudio.info(path)
-                if info.num_frames > 2000:
-                    tqdm.write(f"Too long audio file: {path}")
-                    df.loc[i, "corrupt"] = True
-            except RuntimeError:
-                tqdm.write(f"Corrupted audio file: {path}")
-                df.loc[i, "corrupt"] = True
+
+    @lru_cache(maxsize=None)
+    def _check_audio_corruption(self, row_name: int) -> bool:
+        row = self.dataset.loc[row_name]
+        path = self._build_path(row)
+        try:
+            info = torchaudio.info(path)
+            if info.num_frames > 2000:
+                return True
+        except RuntimeError:
+            return True
+        return False
 
     def _guess_samplerate(self) -> int:
         first_row = self.dataset.iloc[0]

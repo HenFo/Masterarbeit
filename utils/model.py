@@ -108,12 +108,13 @@ class MmLlamaConfig(PretrainedConfig):
 
 
 class MmLlama(nn.Module):
-    def __init__(self, config: MmLlamaConfig) -> None:
+    def __init__(self, config: MmLlamaConfig, train_llm:bool = False) -> None:
         super(MmLlama, self).__init__()
         self.config = config
+        self.train_llm = train_llm
         self.llama = AutoModelForCausalLM.from_pretrained(
             config.llm_config._name_or_path
-        )
+        ).half()
         self.llama.resize_token_embeddings(self.config.audio_token_id + 1, 8)
         if config.llm_pretrained_adapter:
             self.llama = PeftModel.from_pretrained(
@@ -121,10 +122,11 @@ class MmLlama(nn.Module):
             )
             self.llama = self.llama.merge_and_unload(progressbar=True)
 
-        self.wave2vec2 = AutoModel.from_pretrained(config.audio_config._name_or_path)
+        self.wave2vec2 = AutoModel.from_pretrained(config.audio_config._name_or_path).half()
 
         self.projector = ModalityProjector(1024, 4096)
 
+    @torch.autocast(device_type="cuda")
     def forward(
         self,
         text: Dict[str, torch.Tensor],
@@ -133,6 +135,31 @@ class MmLlama(nn.Module):
     ):
         inputs = self._get_inputs(text, acoustic)
         return self.llama(**inputs)
+    
+    def freeze_llm(self):
+        for param in self.llama.parameters():
+            param.requires_grad = False
+    
+    def unfreeze_llm(self):
+        for param in self.llama.parameters():
+            param.requires_grad = True
+    
+    def freeze_audio_encoder(self):
+        for param in self.wave2vec2.parameters():
+            param.requires_grad = False
+    
+    def unfreeze_audio_encoder(self):
+        for param in self.wave2vec2.parameters():
+            param.requires_grad = True
+
+    def freeze_encoder(self):
+        if not self.train_llm:
+            self.freeze_llm()
+        self.freeze_audio_encoder()
+
+    def unfreeze_projector(self):
+        for param in self.projector.parameters():
+            param.requires_grad = True
 
     def _get_inputs(
         self,
@@ -151,8 +178,11 @@ class MmLlama(nn.Module):
             text["inputs_embeds"] = text_embeddings
             return text
 
-        acoustic_embeddings = self.wave2vec2(**acoustic).last_hidden_state
+        acoustic_embeddings = self.wave2vec2(**acoustic).last_hidden_state.detach()
         acoustic_embeddings = self.projector(acoustic_embeddings)
+
+        compute_type = acoustic_embeddings.dtype
+        text_embeddings = text_embeddings.to(compute_type)
 
         return self._merge_modalities(
             acoustic_embeddings,
@@ -160,14 +190,17 @@ class MmLlama(nn.Module):
             input_ids,
             labels=labels,
             input_attention_mask=input_attention_mask,
+            dtype=compute_type
         )
 
+    @torch.autocast(device_type="cuda")
     def generate(
         self,
         text: Dict[str, torch.Tensor],
         acoustic: Dict[str, Union[torch.Tensor, None]] = None,
         **kwargs,
     ):
+        
         inputs = self._get_inputs(text, acoustic)
         inputs_embeds, attention_mask = (
             inputs["inputs_embeds"],
@@ -176,6 +209,13 @@ class MmLlama(nn.Module):
         return self.llama.generate(
             inputs_embeds=inputs_embeds, attention_mask=attention_mask, **kwargs
         )
+    
+    def state_dict(self, *args, **kwargs):
+        return self.projector.state_dict()
+        
+    
+    def load_state_dict(self, state_dict):
+        self.projector.load_state_dict(state_dict)
 
     def _merge_modalities(
         self,
@@ -184,6 +224,7 @@ class MmLlama(nn.Module):
         input_ids,
         input_attention_mask,
         labels: Union[torch.Tensor, None],
+        dtype: torch.dtype,
     ) -> Dict[str, torch.Tensor]:
         """
         Adapted from the huggingface LLaVA implementation
@@ -221,7 +262,7 @@ class MmLlama(nn.Module):
             batch_size,
             max_embed_dim,
             embed_dim,
-            dtype=inputs_embeds.dtype,
+            dtype=dtype,
             device=inputs_embeds.device,
         )
         final_attention_mask = torch.zeros(
@@ -293,41 +334,6 @@ class MmLlama(nn.Module):
             "inputs_embeds": final_embedding,
             "attention_mask": final_attention_mask,
             "labels": final_labels,
-            "position_ids": position_ids,
+            # "position_ids": position_ids,
         }
 
-
-if __name__ == "__main__":
-    from transformers import AutoConfig, AutoModel, AutoTokenizer
-
-    cA = AutoConfig.from_pretrained(
-        "/home/fock/code/MultiModalInstructERC/models/acoustic/wav2vec2/wav2vec2-large-robust-12-ft-emotion-msp-dim"
-    )
-    cT = AutoConfig.from_pretrained(
-        "/home/fock/code/MultiModalInstructERC/models/language/LLaMA2"
-    )
-    tT = AutoTokenizer.from_pretrained(
-        "/home/fock/code/MultiModalInstructERC/models/language/LLaMA2"
-    )
-    tT.add_special_tokens({"additional_special_tokens": ["<audio>"]})
-    tT.pad_token_id = tT.unk_token_id
-    tT.padding_side = "left"
-
-    cMM = MmLlamaConfig(
-        cT,
-        cA,
-        tT.encode("<audio>")[-1],
-        tT.pad_token_id,
-        "/home/fock/code/MultiModalInstructERC/models/language/adapter/InstructERC_unbalanced",
-    )
-
-    m = MmLlama(cMM)
-    inpA = torch.zeros((1, 1000))
-    inpT = tT(
-        "<audio> test",
-        return_tensors="pt",
-    )
-    m(acoustic=inpA, **inpT)
-
-    r = m.generate(acoustic=inpA, **inpT)
-    print(tT.batch_decode(r, skip_special_tokens=True))
