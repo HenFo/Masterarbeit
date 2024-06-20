@@ -179,6 +179,7 @@ class MmLlama(nn.Module):
             return text
 
         acoustic_embeddings = self.wave2vec2(**acoustic).last_hidden_state.detach()
+        acoustic_embeddings = self.interpolate_vectors(acoustic_embeddings, 10)
         acoustic_embeddings = self.projector(acoustic_embeddings)
 
         compute_type = acoustic_embeddings.dtype
@@ -192,6 +193,13 @@ class MmLlama(nn.Module):
             input_attention_mask=input_attention_mask,
             dtype=compute_type
         )
+    
+    def interpolate_vectors(self, vectors, num_vectors):
+        # Perform linear interpolation to generate the required number of vectors
+        interpolated_vectors = torch.nn.functional.interpolate(
+            vectors.T.unsqueeze(0), size=num_vectors, mode="linear", align_corners=True
+        ).squeeze(0).T
+        return interpolated_vectors
 
     @torch.autocast(device_type="cuda")
     def generate(

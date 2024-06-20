@@ -1,5 +1,6 @@
-meld/**/*
+datasets/**/*
 models/**/*
 experiments/**/*
 Schmierblatt.ipynb
 */**/__pycache__
+.conda

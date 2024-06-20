@@ -219,6 +219,7 @@ class MeldDataset(Dataset):
 
     def _get_audio(self, row) -> torch.Tensor:
         path = self._build_path(row)
+        print(path)
         wavs, _ = torchaudio.load(path)
         wav = wavs[torch.argmax(torch.std(wavs, dim=1))]
         wav = self.resampler(wav)
@@ -237,6 +238,7 @@ class MeldDataset(Dataset):
     def _check_audio_corruption(self, row_name: int) -> bool:
         row = self.dataset.loc[row_name]
         path = self._build_path(row)
+        # print(path)
         try:
             info = torchaudio.info(path)
             if info.num_frames > 2000:
@@ -248,7 +250,7 @@ class MeldDataset(Dataset):
     def _guess_samplerate(self) -> int:
         first_row = self.dataset.iloc[0]
         path = self._build_path(first_row)
-        _, sr = torchaudio.load(path)
+        _, sr = torchaudio.load(path, format="mp4")
         return sr
 
     def _prepare_dataset(self, path) -> pd.DataFrame:

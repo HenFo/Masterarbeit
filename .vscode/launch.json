@@ -16,6 +16,19 @@
                 "launch",
                 "main.py",
             ]
+        },
+        {
+            "name": "Accelerate Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": ".conda/bin/accelerate",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true,
+            "args": [
+                "launch",
+                "${file}",
+            ]
         }
     ]
 }

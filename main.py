@@ -31,9 +31,9 @@ LANGUAGE_MODEL = "/home/fock/code/MultiModalInstructERC/models/language/LLaMA2"
 LORA_ADAPTER = "/home/fock/code/MultiModalInstructERC/models/language/adapter/InstructERC_unbalanced"
 ACOUSTIC_MODEL = "/home/fock/code/MultiModalInstructERC/models/acoustic/wav2vec2/wav2vec2-large-robust-12-ft-emotion-msp-dim"
 OUTPUT_PATH = "/home/fock/code/MultiModalInstructERC/experiments/multimodal/mlp/concat/"
-DS_TRAIN_PATH = "/home/fock/code/MultiModalInstructERC/meld/train_sent_emo.csv"
-DS_DEV_PATH = "/home/fock/code/MultiModalInstructERC/meld/dev_sent_emo.csv"
-DS_TEST_PATH = "/home/fock/code/MultiModalInstructERC/meld/test_sent_emo.csv"
+DS_TRAIN_PATH = "/home/fock/code/MultiModalInstructERC/datasets/meld/train_sent_emo.csv"
+DS_DEV_PATH = "/home/fock/code/MultiModalInstructERC/datasets/meld/dev_sent_emo.csv"
+DS_TEST_PATH = "/home/fock/code/MultiModalInstructERC/datasets/meld/test_sent_emo.csv"
 
 
 @dataclass()
@@ -63,6 +63,7 @@ class Args:
     lora_dropout: float = 0.1
     lora_module_name: str = ".*?llama.*?[qkvo]_proj"
     resume_training: bool = False
+    window_size: int = 5
 
 
 def parse_args():
@@ -79,6 +80,7 @@ def parse_args():
     parser.add_argument("--mixed_precision", type=str, default="bf16")
     parser.add_argument("--task", type=str, default="normal")
     parser.add_argument("--stage", type=int, default=1)
+    parser.add_argument("--window_size", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=3)
     parser.add_argument("--eval_batch_size", type=int, default=1)
     parser.add_argument("--deepspeed_config", type=str, default=None)
@@ -101,23 +103,23 @@ def parse_args():
 args = parse_args()
 
 
-# args = Args(
-#     batch_size=2,
-#     gradient_accumulation_steps=32,
-#     llm_id=LANGUAGE_MODEL,
-#     acoustic_id=ACOUSTIC_MODEL,
-#     adapter_id=LORA_ADAPTER,
-#     output_path=OUTPUT_PATH,
-#     train_dataset=DS_TRAIN_PATH,
-#     test_dataset=DS_TEST_PATH,
-#     dev_dataset=DS_DEV_PATH,
-#     task="normal",
-#     deepspeed_config="deepspeed_config.json",
-#     epochs=7,
-#     lr=1e-5,
-#     train_llm=True,
-#     resume_training=False,
-# )
+args = Args(
+    batch_size=2,
+    gradient_accumulation_steps=32,
+    llm_id=LANGUAGE_MODEL,
+    acoustic_id=ACOUSTIC_MODEL,
+    adapter_id=LORA_ADAPTER,
+    output_path=OUTPUT_PATH,
+    train_dataset=DS_TRAIN_PATH,
+    test_dataset=DS_TEST_PATH,
+    dev_dataset=DS_DEV_PATH,
+    task="normal",
+    deepspeed_config="deepspeed_config.json",
+    epochs=7,
+    lr=1e-5,
+    train_llm=True,
+    resume_training=False,
+)
 
 
 def get_grouped_parameters(model):
@@ -187,8 +189,9 @@ def load_model_for_stage_2(model: nn.Module):
             bias="none",
         )
         model = get_peft_model(model, lora_config)
-    model.unfreeze_projector()
+    # model.unfreeze_projector()
     return model
+
 
 
 def train():
@@ -218,8 +221,8 @@ def train():
     )
 
     ## setup datasets
-    train_dataset = MeldDataset(args.test_dataset, mode="train", task=args.task)
-    eval_dataset = MeldDataset(args.test_dataset, mode="dev", task="normal")
+    train_dataset = MeldDataset(args.test_dataset, mode="train", task=args.task, window=args.window_size)
+    eval_dataset = MeldDataset(args.test_dataset, mode="dev", task="normal", window=args.window_size)
     # test_dataset = MeldDataset(args.test_dataset, mode="test", task="normal")
 
     train_dataloader = DataLoader(
@@ -273,7 +276,8 @@ def train():
             except torch.cuda.OutOfMemoryError:
                 print("OutOfMemoty error on step", step, "skipping step")
                 print("Text size", batch["text"]["input_ids"].size())
-                print("Audio size", batch["audio"]["input_values"].size())
+                print("Audio size", batch["acoustic"]["input_values"].size())
+                torch.cuda.empty_cache()
 
         # evaluation
         eval_dataloader = DataLoader(
@@ -289,15 +293,15 @@ def train():
         if accelerator.is_main_process:
             f1 = evaluate(accelerator, tokenizer, model, epoch, eval_dataloader)
             if f1 > best_f1:
-                print(f"Best F1: {best_f1}")
                 print("Saving model")
                 best_f1 = f1
+                print(f"Best F1: {best_f1}")
                 unwrapped_model = accelerator.unwrap_model(model)
-                create_folder_if_not_exists(args.output_path)
-                torch.save(
-                    unwrapped_model.state_dict(),
-                    os.path.join(args.output_path, "best_model.pth"),
-                )
+                if args.stage == 1:
+                    torch.save(
+                        unwrapped_model.state_dict(),
+                        os.path.join(args.output_path, "best_model.pth"),
+                    )
                 if args.train_llm:
                     model.save_pretrained(args.output_path)
                 tokenizer.save_pretrained(args.output_path)
@@ -360,7 +364,7 @@ def evaluate(
                 "target": target,
             }
         )
-    with open(f"preds_epoch_{epoch}.json", "wt") as f:
+    with open(os.path.join(args.output_path, f"preds_epoch_{epoch}.json"), "wt") as f:
         json.dump(preds_for_eval, f)
 
     print(f"F1 in Epoch {epoch}: {f1}")
@@ -368,4 +372,5 @@ def evaluate(
 
 
 if __name__ == "__main__":
+    create_folder_if_not_exists(args.output_path)
     train()
