@@ -105,25 +105,25 @@ def parse_args():
 args = parse_args()
 
 
-args = Args(
-    batch_size=2,
-    gradient_accumulation_steps=16,
-    llm_id=LANGUAGE_MODEL,
-    acoustic_id=ACOUSTIC_MODEL,
-    adapter_id=LORA_ADAPTER,
-    output_path=OUTPUT_PATH,
-    checkpoint_path="/home/fock/code/MultiModalInstructERC/experiments/multimodal/mlp/concat/interpolate/stage_1",
-    train_dataset=DS_TRAIN_PATH,
-    test_dataset=DS_TEST_PATH,
-    dev_dataset=DS_DEV_PATH,
-    task="normal",
-    deepspeed_config="deepspeed_config.json",
-    epochs=7,
-    lr=1e-5,
-    train_llm=True,
-    resume_training=False,
-    stage=2
-)
+# args = Args(
+#     batch_size=2,
+#     gradient_accumulation_steps=16,
+#     llm_id=LANGUAGE_MODEL,
+#     acoustic_id=ACOUSTIC_MODEL,
+#     adapter_id=LORA_ADAPTER,
+#     output_path=OUTPUT_PATH,
+#     checkpoint_path="/home/fock/code/MultiModalInstructERC/experiments/multimodal/mlp/concat/interpolate/stage_1",
+#     train_dataset=DS_TRAIN_PATH,
+#     test_dataset=DS_TEST_PATH,
+#     dev_dataset=DS_DEV_PATH,
+#     task="normal",
+#     deepspeed_config="deepspeed_config.json",
+#     epochs=7,
+#     lr=1e-5,
+#     train_llm=True,
+#     resume_training=False,
+#     stage=2
+# )
 
 
 def get_grouped_parameters(model):
@@ -271,11 +271,7 @@ def train():
     (model, optimizer, lr_scheduler, train_dataloader) = accelerator.prepare(
         model, optimizer, lr_scheduler, train_dataloader
     )
-    
-    if accelerator.is_main_process:
-        save_model(accelerator, tokenizer, model)
 
-    exit()
 
     # training loop
     best_f1 = 0
