@@ -27,15 +27,6 @@ from peft import LoraConfig, get_peft_model, PeftModel
 import torch.nn as nn
 import argparse
 
-LANGUAGE_MODEL = "/home/fock/code/MultiModalInstructERC/models/language/LLaMA2"
-LORA_ADAPTER = "/home/fock/code/MultiModalInstructERC/models/language/adapter/InstructERC_unbalanced"
-ACOUSTIC_MODEL = "/home/fock/code/MultiModalInstructERC/models/acoustic/wav2vec2/wav2vec2-large-robust-12-ft-emotion-msp-dim"
-OUTPUT_PATH = "/home/fock/code/MultiModalInstructERC/experiments/test/"
-DS_TRAIN_PATH = "/home/fock/code/MultiModalInstructERC/meld/train_sent_emo.csv"
-DS_DEV_PATH = "/home/fock/code/MultiModalInstructERC/meld/dev_sent_emo.csv"
-DS_TEST_PATH = "/home/fock/code/MultiModalInstructERC/meld/test_sent_emo.csv"
-
-
 @dataclass()
 class Args:
     llm_id: str = None
@@ -71,29 +62,7 @@ def parse_args():
     parser.add_argument("--adapter_id", type=str, default=None)
     parser.add_argument("--acoustic_id", type=str, default=None)
     parser.add_argument("--output_path", type=str, default=None)
-    parser.add_argument("--checkpoint_path", type=str, default=None)
-    parser.add_argument("--train_dataset", type=str, default=None)
-    parser.add_argument("--dev_dataset", type=str, default=None)
     parser.add_argument("--test_dataset", type=str, default=None)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
-    parser.add_argument("--mixed_precision", type=str, default="bf16")
-    parser.add_argument("--task", type=str, default="normal")
-    parser.add_argument("--stage", type=int, default=1)
-    parser.add_argument("--batch_size", type=int, default=3)
-    parser.add_argument("--eval_batch_size", type=int, default=1)
-    parser.add_argument("--deepspeed_config", type=str, default=None)
-    parser.add_argument("--lr", type=float, default=2e-5)
-    parser.add_argument("--epochs", type=int, default=15)
-    parser.add_argument("--warmup_ratio", type=float, default=0.1)
-    parser.add_argument("--weight_decay", type=float, default=0)
-    parser.add_argument("--train_llm", type=bool, default=False)
-    parser.add_argument("--lora_dim", type=int, default=16)
-    parser.add_argument("--lora_alpha", type=int, default=32)
-    parser.add_argument("--lora_dropout", type=float, default=0.1)
-    parser.add_argument(
-        "--lora_module_name", type=str, default=".*?llama.*?[qkvo]_proj"
-    )
-    parser.add_argument("--resume_training", type=bool, default=False)
     args = parser.parse_args()
     return Args(**vars(args))
 
@@ -101,111 +70,24 @@ def parse_args():
 args = parse_args()
 
 
-args = Args(
-    batch_size=2,
-    gradient_accumulation_steps=32,
-    llm_id=LANGUAGE_MODEL,
-    acoustic_id=ACOUSTIC_MODEL,
-    adapter_id=LORA_ADAPTER,
-    output_path=OUTPUT_PATH,
-    train_dataset=DS_TRAIN_PATH,
-    test_dataset=DS_TEST_PATH,
-    dev_dataset=DS_DEV_PATH,
-    task="normal",
-    deepspeed_config="deepspeed_config.json",
-    epochs=7,
-    lr=1e-5,
-    train_llm=True,
-    resume_training=False,
-    stage=2,
-    lora_dim=16,
-    lora_alpha=32,
-    lora_dropout=0.1,
-    lora_module_name=".*?llama.*?[qkvo]_proj",
-    mixed_precision="bf16",
-    warmup_ratio=0.1,
-    weight_decay=0,
-    checkpoint_path="/home/fock/code/MultiModalInstructERC/experiments/multimodal/mlp/concat/stage_1/",
-)
 
-
-def get_grouped_parameters(model):
-    no_decay = ["bias", "LayerNorm.weight"]
-    grouped_parameters = [
-        {
-            "params": [
-                p
-                for n, p in model.named_parameters()
-                if not any(nd in n for nd in no_decay) and p.requires_grad
-            ],
-            "weight_decay": args.weight_decay,
-        },
-        {
-            "params": [
-                p
-                for n, p in model.named_parameters()
-                if any(nd in n for nd in no_decay) and p.requires_grad
-            ],
-            "weight_decay": 0.0,
-        },
-    ]
-    return grouped_parameters
-
-
-def get_scheduler(optimizer, len_dataset, batch_size, epochs):
-    num_steps = math.ceil(len_dataset / batch_size)
-    num_steps *= epochs
-    warmup_steps = math.ceil(num_steps * args.warmup_ratio)
-    scheduler = get_linear_schedule_with_warmup(
-        optimizer, num_warmup_steps=warmup_steps, num_training_steps=num_steps
-    )
-    return scheduler
-
-
-def load_model_for_stage(model: nn.Module, stage: int):
-    if stage == 1:
-        return load_model_for_stage_1(model)
-    elif stage == 2:
-        return load_model_for_stage_2(model)
-    else:
-        raise ValueError("Invalid stage number")
-
-
-def load_model_for_stage_1(model: nn.Module):
-    if args.resume_training:
-        model.load_state_dict(
-            torch.load(os.path.join(args.output_path, "best_model.pth"))
-        )
-    model.freeze_encoder()
-    return model
-
-
-def load_model_for_stage_2(model: nn.Module):
+def load_model_for_test(model: nn.Module):
     model.load_state_dict(
-        torch.load(os.path.join(args.checkpoint_path, "best_model.pth"))
+        torch.load(os.path.join(args.output_path, "best_model.pth"))
     )
-    if args.resume_training:
-        model = PeftModel.from_pretrained(model, args.output_path, is_trainable=True)
-    else:
-        lora_config = LoraConfig(
-            # task_type="CAUSAL_LM",
-            r=args.lora_dim,
-            lora_alpha=args.lora_alpha,
-            lora_dropout=args.lora_dropout,
-            target_modules=args.lora_module_name,
-            bias="none",
-        )
-        model = get_peft_model(model, lora_config)
-    model.unfreeze_projector()
+    model = PeftModel.from_pretrained(model, args.output_path, is_trainable=False)
+    model = model.merge_and_unload(progressbar=True)
     return model
 
 
-def train():
-    accelerator = Accelerator(
-        mixed_precision=args.mixed_precision,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-    )
+def prepare_batch(batch:dict[str, dict[str, torch.Tensor]]):
+    for k in batch:
+        for kk in batch[k]:
+            batch[k][kk] = batch[k][kk].cuda()
+    return batch
+    
 
+def test():
     # Load configurations
     llm_config = AutoConfig.from_pretrained(args.llm_id)
     tokenizer = AutoTokenizer.from_pretrained(args.llm_id)
@@ -227,64 +109,29 @@ def train():
     )
 
     ## setup datasets
-    train_dataset = MeldDataset(args.test_dataset, mode="train", task=args.task)
-    eval_dataset = MeldDataset(args.test_dataset, mode="dev", task="normal")
-    # test_dataset = MeldDataset(args.test_dataset, mode="test", task="normal")
+    test_dataset = MeldDataset(args.test_dataset, mode="test", task="normal")
 
-    train_dataloader = DataLoader(
-        train_dataset,
+    test_dataloader = DataLoader(
+        test_dataset,
         batch_size=args.batch_size,
-        shuffle=True,
+        shuffle=False,
         num_workers=8,
-        collate_fn=SequenceClassificationCollator(processor, mode="train"),
+        collate_fn=SequenceClassificationCollator(processor, mode="dev"),
     )
     # get model
     model = MmLlama(config, train_llm=args.train_llm)
-    model = load_model_for_stage(model, args.stage)
-
-    # setup optimizer
-    grouped_parameters = get_grouped_parameters(model)
-    optimizer = AdamW(grouped_parameters, lr=args.lr, betas=(0.9, 0.95))
-    lr_scheduler = get_scheduler(
-        optimizer, len(train_dataset), args.batch_size, args.epochs
-    )
-
-    # setup accelerator
-    (model, optimizer, lr_scheduler, train_dataloader) = accelerator.prepare(
-        model, optimizer, lr_scheduler, train_dataloader
-    )
-
-    # training loop
-    
+    model = load_model_for_test(model)
+    model = model.cuda()
+    evaluate(tokenizer, model, test_dataloader)
 
 
-    if accelerator.is_main_process:
-        unwrapped_model = accelerator.unwrap_model(model)
-        create_folder_if_not_exists(args.output_path)
-        torch.save(
-            unwrapped_model.state_dict(),
-            os.path.join(args.output_path, "best_model.pth"),
-        )
-        if args.train_llm:
-            model.save_pretrained(args.output_path)
-        tokenizer.save_pretrained(args.output_path)
-        print("model saved")
-    accelerator.wait_for_everyone()
-
-
-def create_folder_if_not_exists(path):
-    if not os.path.exists(path):
-        os.makedirs(path)
 
 
 def evaluate(
-    accelerator: Accelerator,
     tokenizer: LlamaTokenizerFast,
     model: MmLlama,
-    epoch: int,
     dataloader: DataLoader,
 ):
-    dataloader = accelerator.prepare(dataloader)
     eval_batch_iterator = tqdm(dataloader, total=len(dataloader), desc="Evaluating")
     all_targets = []
     all_preds = []
@@ -293,6 +140,7 @@ def evaluate(
     for inputs, labels in eval_batch_iterator:
         with torch.no_grad():
             try:
+                inputs = prepare_batch(inputs)
                 preds = model.generate(**inputs)
             except TimeoutError:
                 print("TimeoutError on input", inputs)
@@ -327,12 +175,12 @@ def evaluate(
                 "target": target,
             }
         )
-    with open(os.path.join(args.output_path, f"preds_epoch_{epoch}.json"), "wt") as f:
+    with open(os.path.join(args.output_path, "final_test_preds.json"), "wt") as f:
         json.dump(preds_for_eval, f)
 
-    print(f"F1 in Epoch {epoch}: {f1}")
+    print(f"F1 for Test: {f1}")
     return f1
 
 
 if __name__ == "__main__":
-    train()
+    test()

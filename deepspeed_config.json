@@ -9,15 +9,12 @@
      },
      "bf16": {
           "enabled": "auto"
-      },
+     },
      "zero_optimization": {
           "stage": 2,
-          "offload_optimizer": {
-               "device": "cpu"
-          },
           "offload_param": {
                "device": "cpu"
-           },
+          },
           "allgather_partitions": true,
           "allgather_bucket_size": 5e8,
           "overlap_comm": true,

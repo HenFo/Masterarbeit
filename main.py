@@ -38,6 +38,7 @@ DS_TEST_PATH = "/home/fock/code/MultiModalInstructERC/datasets/meld/test_sent_em
 
 @dataclass()
 class Args:
+    evaluation: bool = False
     llm_id: str = None
     adapter_id: str = None
     acoustic_id: str = None
@@ -68,6 +69,7 @@ class Args:
 
 def parse_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--evaluation", type=bool, default=False)
     parser.add_argument("--llm_id", type=str, default=None)
     parser.add_argument("--adapter_id", type=str, default=None)
     parser.add_argument("--acoustic_id", type=str, default=None)
@@ -105,11 +107,12 @@ args = parse_args()
 
 args = Args(
     batch_size=2,
-    gradient_accumulation_steps=32,
+    gradient_accumulation_steps=16,
     llm_id=LANGUAGE_MODEL,
     acoustic_id=ACOUSTIC_MODEL,
     adapter_id=LORA_ADAPTER,
     output_path=OUTPUT_PATH,
+    checkpoint_path="/home/fock/code/MultiModalInstructERC/experiments/multimodal/mlp/concat/interpolate/stage_1",
     train_dataset=DS_TRAIN_PATH,
     test_dataset=DS_TEST_PATH,
     dev_dataset=DS_DEV_PATH,
@@ -119,6 +122,7 @@ args = Args(
     lr=1e-5,
     train_llm=True,
     resume_training=False,
+    stage=2
 )
 
 
@@ -153,6 +157,14 @@ def get_scheduler(optimizer, len_dataset, batch_size, epochs):
         optimizer, num_warmup_steps=warmup_steps, num_training_steps=num_steps
     )
     return scheduler
+
+
+def load_tokenizer():
+    tokenizer = AutoTokenizer.from_pretrained(args.llm_id)
+    tokenizer.add_special_tokens({"additional_special_tokens": ["<audio>"]})
+    tokenizer.pad_token_id = tokenizer.unk_token_id
+    tokenizer.padding_side = "left"
+    return tokenizer
 
 
 def load_model_for_stage(model: nn.Module, stage: int):
@@ -193,6 +205,17 @@ def load_model_for_stage_2(model: nn.Module):
     return model
 
 
+def load_model_for_test(model: nn.Module):
+    model.load_state_dict(torch.load(os.path.join(args.output_path, "best_model.pth")))
+    model = PeftModel.from_pretrained(model, args.output_path, is_trainable=False)
+    model = model.merge_and_unload(progressbar=True)
+    return model
+
+
+def create_folder_if_not_exists(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+
 
 def train():
     accelerator = Accelerator(
@@ -202,14 +225,11 @@ def train():
 
     # Load configurations
     llm_config = AutoConfig.from_pretrained(args.llm_id)
-    tokenizer = AutoTokenizer.from_pretrained(args.llm_id)
     ac_config = AutoConfig.from_pretrained(args.acoustic_id)
     ac_processor = AutoProcessor.from_pretrained(args.acoustic_id)
 
     # setup of tokenizer
-    tokenizer.add_special_tokens({"additional_special_tokens": ["<audio>"]})
-    tokenizer.pad_token_id = tokenizer.unk_token_id
-    tokenizer.padding_side = "left"
+    tokenizer = load_tokenizer()
 
     # setup of processor
     processor = MmLlamaProcessor(ac_processor, tokenizer)
@@ -221,8 +241,12 @@ def train():
     )
 
     ## setup datasets
-    train_dataset = MeldDataset(args.test_dataset, mode="train", task=args.task, window=args.window_size)
-    eval_dataset = MeldDataset(args.test_dataset, mode="dev", task="normal", window=args.window_size)
+    train_dataset = MeldDataset(
+        args.train_dataset, mode="train", task=args.task, window=args.window_size
+    )
+    eval_dataset = MeldDataset(
+        args.dev_dataset, mode="dev", task="normal", window=args.window_size
+    )
     # test_dataset = MeldDataset(args.test_dataset, mode="test", task="normal")
 
     train_dataloader = DataLoader(
@@ -247,6 +271,11 @@ def train():
     (model, optimizer, lr_scheduler, train_dataloader) = accelerator.prepare(
         model, optimizer, lr_scheduler, train_dataloader
     )
+    
+    if accelerator.is_main_process:
+        save_model(accelerator, tokenizer, model)
+
+    exit()
 
     # training loop
     best_f1 = 0
@@ -289,29 +318,65 @@ def train():
             sampler=SequentialSampler(eval_dataset),
         )
 
-
         if accelerator.is_main_process:
             f1 = evaluate(accelerator, tokenizer, model, epoch, eval_dataloader)
             if f1 > best_f1:
                 print("Saving model")
                 best_f1 = f1
                 print(f"Best F1: {best_f1}")
-                unwrapped_model = accelerator.unwrap_model(model)
-                if args.stage == 1:
-                    torch.save(
-                        unwrapped_model.state_dict(),
-                        os.path.join(args.output_path, "best_model.pth"),
-                    )
-                if args.train_llm:
-                    model.save_pretrained(args.output_path)
-                tokenizer.save_pretrained(args.output_path)
+                save_model(accelerator, tokenizer, model)
                 print("model saved")
         accelerator.wait_for_everyone()
 
 
-def create_folder_if_not_exists(path):
-    if not os.path.exists(path):
-        os.makedirs(path)
+def save_model(accelerator, tokenizer, model):
+    unwrapped_model = accelerator.unwrap_model(model)
+    if args.stage == 1:
+        torch.save(
+            unwrapped_model.state_dict(),
+            os.path.join(args.output_path, "best_model.pth"),
+        )
+    if args.train_llm:
+        model.save_pretrained(args.output_path)
+    tokenizer.save_pretrained(args.output_path)
+
+
+def test():
+    accelerator = Accelerator(mixed_precision=args.mixed_precision)
+    # Load configurations
+    llm_config = AutoConfig.from_pretrained(args.llm_id)
+    ac_config = AutoConfig.from_pretrained(args.acoustic_id)
+    ac_processor = AutoProcessor.from_pretrained(args.acoustic_id)
+
+    # setup of tokenizer
+    tokenizer = load_tokenizer()
+
+    # setup of processor
+    processor = MmLlamaProcessor(ac_processor, tokenizer)
+
+    ## setup of config
+    audio_token_id = tokenizer.additional_special_tokens_ids[0]
+    config = MmLlamaConfig(
+        llm_config, ac_config, audio_token_id, tokenizer.pad_token_id, args.adapter_id
+    )
+
+    model = MmLlama(config)
+    model = load_model_for_test(model)
+
+    ## setup datasets
+    test_dataset = MeldDataset(args.test_dataset, mode="test", task="normal")
+
+    test_dataloader = DataLoader(
+        test_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=8,
+        collate_fn=SequenceClassificationCollator(processor, mode="dev"),
+    )
+    # get model
+    model, test_dataloader = accelerator.prepare(model, test_dataloader)
+    if accelerator.is_main_process:
+        evaluate(accelerator, tokenizer, model, -1, test_dataloader)
 
 
 def evaluate(
@@ -372,5 +437,8 @@ def evaluate(
 
 
 if __name__ == "__main__":
-    create_folder_if_not_exists(args.output_path)
-    train()
+    if args.evaluation:
+        test()
+    else:
+        create_folder_if_not_exists(args.output_path)
+        train()

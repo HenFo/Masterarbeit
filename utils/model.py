@@ -179,7 +179,7 @@ class MmLlama(nn.Module):
             return text
 
         acoustic_embeddings = self.wave2vec2(**acoustic).last_hidden_state.detach()
-        acoustic_embeddings = self.interpolate_vectors(acoustic_embeddings, 10)
+        acoustic_embeddings = self.aggregate_temporal_features(acoustic_embeddings, 10)
         acoustic_embeddings = self.projector(acoustic_embeddings)
 
         compute_type = acoustic_embeddings.dtype
@@ -194,11 +194,13 @@ class MmLlama(nn.Module):
             dtype=compute_type
         )
     
-    def interpolate_vectors(self, vectors, num_vectors):
-        # Perform linear interpolation to generate the required number of vectors
+    def aggregate_temporal_features(self, vectors, num_vectors):
+        assert len(vectors.size()) == 3
         interpolated_vectors = torch.nn.functional.interpolate(
-            vectors.T.unsqueeze(0), size=num_vectors, mode="linear", align_corners=True
-        ).squeeze(0).T
+            torch.swapaxes(vectors, 1,2), size=num_vectors, mode="linear", align_corners=True
+        )
+        interpolated_vectors = torch.swapaxes(interpolated_vectors, 1,2)
+        assert interpolated_vectors.size()[1] == num_vectors
         return interpolated_vectors
 
     @torch.autocast(device_type="cuda")
@@ -218,12 +220,23 @@ class MmLlama(nn.Module):
             inputs_embeds=inputs_embeds, attention_mask=attention_mask, **kwargs
         )
     
-    def state_dict(self, *args, **kwargs):
-        return self.projector.state_dict()
+    def state_dict(self, modules = None, *args, **kwargs):
+        if modules is None:
+            return super().state_dict(*args, **kwargs)
+        if isinstance(modules, str):
+            modules = [modules]
+        state_dict = {}
+        for module in modules:
+            state_dict[module] = getattr(self, module).state_dict()
+        return state_dict
         
     
     def load_state_dict(self, state_dict):
-        self.projector.load_state_dict(state_dict)
+        if any([module in state_dict for module in ["llama", "wave2vec2", "projector"]]):
+            for module, module_state_dict in state_dict.items():
+                getattr(self, module).load_state_dict(module_state_dict)
+        else:
+            super().load_state_dict(state_dict)
 
     def _merge_modalities(
         self,

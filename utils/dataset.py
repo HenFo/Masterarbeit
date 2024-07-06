@@ -219,7 +219,6 @@ class MeldDataset(Dataset):
 
     def _get_audio(self, row) -> torch.Tensor:
         path = self._build_path(row)
-        print(path)
         wavs, _ = torchaudio.load(path)
         wav = wavs[torch.argmax(torch.std(wavs, dim=1))]
         wav = self.resampler(wav)
@@ -227,7 +226,7 @@ class MeldDataset(Dataset):
         return wav.numpy()
 
     def _build_path(self, row: pd.Series) -> str:
-        filename = f"dia{row['Dialogue_ID']}_utt{row['Utterance_ID']}.mp4"
+        filename = f"dia{row['Dialogue_ID']}_utt{row['Utterance_ID']}.wav"
         path = os.path.join(
             os.path.dirname(self.dataset_path), "audio", self.mode, filename
         )
@@ -238,10 +237,10 @@ class MeldDataset(Dataset):
     def _check_audio_corruption(self, row_name: int) -> bool:
         row = self.dataset.loc[row_name]
         path = self._build_path(row)
-        # print(path)
         try:
             info = torchaudio.info(path)
-            if info.num_frames > 2000:
+            # cut everything longer than 20 seconds
+            if info.num_frames / info.sample_rate > 20:
                 return True
         except RuntimeError:
             return True
@@ -250,7 +249,7 @@ class MeldDataset(Dataset):
     def _guess_samplerate(self) -> int:
         first_row = self.dataset.iloc[0]
         path = self._build_path(first_row)
-        _, sr = torchaudio.load(path, format="mp4")
+        _, sr = torchaudio.load(path)
         return sr
 
     def _prepare_dataset(self, path) -> pd.DataFrame:
