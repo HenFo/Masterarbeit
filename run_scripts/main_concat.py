@@ -19,7 +19,7 @@ from transformers import (
 )
 from utils import (
     MeldDataset,
-    MmLlama,
+    MmLlamaConcat,
     MmLlamaConfig,
     MmLlamaProcessor,
     SequenceClassificationCollator,
@@ -280,7 +280,7 @@ def train():
         collate_fn=SequenceClassificationCollator(processor, mode="train"),
     )
     # get model
-    model = MmLlama(config, train_llm=args.train_llm)
+    model = MmLlamaConcat(config, train_llm=args.train_llm)
     model = load_model_for_stage(model, args.stage)
 
     # setup optimizer
@@ -438,7 +438,7 @@ def test():
         llm_config, ac_config, audio_token_id, tokenizer.pad_token_id, args.adapter_id
     )
 
-    model = MmLlama(config)
+    model = MmLlamaConcat(config)
     model = load_model_for_test(model)
 
     ## setup datasets
@@ -457,7 +457,7 @@ def test():
 
 def evaluate(
     accelerator: Accelerator,
-    model: MmLlama,
+    model: MmLlamaConcat,
     epoch: int,
     dataloader: DataLoader,
 ):
@@ -477,7 +477,7 @@ def evaluate(
 
 def evaluate_f1(
     tokenizer: LlamaTokenizerFast,
-    model: MmLlama,
+    model: MmLlamaConcat,
     dataloader: DataLoader,
 ):
     eval_batch_iterator = tqdm(dataloader, total=len(dataloader), desc="Evaluating")

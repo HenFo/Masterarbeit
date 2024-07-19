@@ -2,6 +2,7 @@ from typing import Dict, List, Tuple, Union
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from peft.peft_model import PeftModel
 from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoTokenizer
 from transformers.configuration_utils import PretrainedConfig
@@ -98,31 +99,35 @@ class MmLlamaConfig(PretrainedConfig):
         audio_token_id: int,
         pad_token_id: int,
         llm_pretrained_adapter=None,
+        audio_end_token_id=None,
     ):
         self.llm_config = llm_config
         self.llm_pretrained_adapter = llm_pretrained_adapter
         self.audio_config = audio_config
         self.audio_token_id = audio_token_id
+        self.audio_end_token_id = audio_end_token_id
         self.ignore_index = -100
         self.pad_token_id = pad_token_id
 
 
-class MmLlama(nn.Module):
-    def __init__(self, config: MmLlamaConfig, train_llm:bool = False) -> None:
-        super(MmLlama, self).__init__()
+class MmLlamaConcat(nn.Module):
+    def __init__(self, config: MmLlamaConfig, train_llm: bool = False) -> None:
+        super(MmLlamaConcat, self).__init__()
         self.config = config
         self.train_llm = train_llm
         self.llama = AutoModelForCausalLM.from_pretrained(
             config.llm_config._name_or_path
         ).half()
-        self.llama.resize_token_embeddings(self.config.audio_token_id + 1, 8)
+        self.llama.resize_token_embeddings(self.config.audio_token_id + 2, 8)
         if config.llm_pretrained_adapter:
             self.llama = PeftModel.from_pretrained(
                 self.llama, self.config.llm_pretrained_adapter
             )
             self.llama = self.llama.merge_and_unload(progressbar=True)
 
-        self.wave2vec2 = AutoModel.from_pretrained(config.audio_config._name_or_path).half()
+        self.wave2vec2 = AutoModel.from_pretrained(
+            config.audio_config._name_or_path
+        ).half()
 
         self.projector = ModalityProjector(1024, 4096)
 
@@ -135,19 +140,19 @@ class MmLlama(nn.Module):
     ):
         inputs = self._get_inputs(text, acoustic)
         return self.llama(**inputs, output_attentions=True)
-    
+
     def freeze_llm(self):
         for param in self.llama.parameters():
             param.requires_grad = False
-    
+
     def unfreeze_llm(self):
         for param in self.llama.parameters():
             param.requires_grad = True
-    
+
     def freeze_audio_encoder(self):
         for param in self.wave2vec2.parameters():
             param.requires_grad = False
-    
+
     def unfreeze_audio_encoder(self):
         for param in self.wave2vec2.parameters():
             param.requires_grad = True
@@ -191,15 +196,18 @@ class MmLlama(nn.Module):
             input_ids,
             labels=labels,
             input_attention_mask=input_attention_mask,
-            dtype=compute_type
+            dtype=compute_type,
         )
-    
+
     def aggregate_temporal_features(self, vectors, num_vectors):
         assert len(vectors.size()) == 3
-        interpolated_vectors = torch.nn.functional.interpolate(
-            torch.swapaxes(vectors, 1,2), size=num_vectors, mode="linear", align_corners=True
+        interpolated_vectors = F.interpolate(
+            torch.swapaxes(vectors, 1, 2),
+            size=num_vectors,
+            mode="linear",
+            align_corners=True,
         )
-        interpolated_vectors = torch.swapaxes(interpolated_vectors, 1,2)
+        interpolated_vectors = torch.swapaxes(interpolated_vectors, 1, 2)
         assert interpolated_vectors.size()[1] == num_vectors
         return interpolated_vectors
 
@@ -210,7 +218,6 @@ class MmLlama(nn.Module):
         acoustic: Dict[str, Union[torch.Tensor, None]] = None,
         **kwargs,
     ):
-        
         inputs = self._get_inputs(text, acoustic)
         inputs_embeds, attention_mask = (
             inputs["inputs_embeds"],
@@ -219,8 +226,8 @@ class MmLlama(nn.Module):
         return self.llama.generate(
             inputs_embeds=inputs_embeds, attention_mask=attention_mask, **kwargs
         )
-    
-    def state_dict(self, modules = None, *args, **kwargs):
+
+    def state_dict(self, modules=None, *args, **kwargs):
         if modules is None:
             return super().state_dict(*args, **kwargs)
         if isinstance(modules, str):
@@ -229,10 +236,11 @@ class MmLlama(nn.Module):
         for module in modules:
             state_dict[module] = getattr(self, module).state_dict()
         return state_dict
-        
-    
+
     def load_state_dict(self, state_dict):
-        if any([module in state_dict for module in ["llama", "wave2vec2", "projector"]]):
+        if any(
+            [module in state_dict for module in ["llama", "wave2vec2", "projector"]]
+        ):
             for module, module_state_dict in state_dict.items():
                 getattr(self, module).load_state_dict(module_state_dict)
         else:
@@ -335,7 +343,10 @@ class MmLlama(nn.Module):
         ].to(target_device)
 
         final_embedding[audio_to_overwrite] = (
-            audio_features[prompts_with_audio_token,:].contiguous().reshape(-1, embed_dim).to(target_device)
+            audio_features[prompts_with_audio_token, :]
+            .contiguous()
+            .reshape(-1, embed_dim)
+            .to(target_device)
         )
         final_attention_mask |= audio_to_overwrite
         position_ids = (final_attention_mask.cumsum(-1) - 1).masked_fill_(
@@ -356,5 +367,113 @@ class MmLlama(nn.Module):
             "attention_mask": final_attention_mask,
             "labels": final_labels,
             # "position_ids": position_ids,
+        }
+
+
+class MmLlamaMerge(MmLlamaConcat):
+    def __init__(self, config: MmLlamaConfig, train_llm: bool = False, alpha:float = 0.5, beta:float = 0.5) -> None:
+        super(MmLlamaMerge, self).__init__(config, train_llm)
+        self.alpha = nn.Parameter(torch.tensor(alpha))
+        self.beta = nn.Parameter(torch.tensor(beta))
+
+    def freeze_scaling(self):
+        self.alpha.requires_grad = False
+        self.beta.requires_grad = False
+    
+    def unfreeze_scaling(self):
+        self.alpha.requires_grad = True
+        self.beta.requires_grad = True
+
+    def load_state_dict(self, state_dict):
+        if any(
+            [module in state_dict for module in ["llama", "wave2vec2", "projector", "alpha", "beta"]]
+        ):
+            for module, module_state_dict in state_dict.items():
+                getattr(self, module).load_state_dict(module_state_dict)
+        else:
+            super().load_state_dict(state_dict)
+
+    def _get_inputs(
+        self,
+        text: Dict[str, torch.Tensor],
+        acoustic: Dict[str, Union[torch.Tensor, None]] | None = None,
+    ) -> Dict[str, torch.Tensor]:
+        input_ids, input_attention_mask, labels = (
+            text["input_ids"],
+            text["attention_mask"],
+            text.get("labels", None),
+        )
+        # acoustic_position = torch.where(self.config.audio_token_id, input_ids)
+        text_embeddings: torch.Tensor = self.llama.get_input_embeddings()(input_ids)
+
+        if acoustic is None:
+            text["inputs_embeds"] = text_embeddings
+            return text
+
+        acoustic_embeddings = self.wave2vec2(**acoustic).last_hidden_state.detach()
+        acoustic_embeddings = self.aggregate_temporal_features(acoustic_embeddings, input_ids)
+        acoustic_embeddings = self.projector(acoustic_embeddings)
+
+        compute_type = acoustic_embeddings.dtype
+        text_embeddings = text_embeddings.to(compute_type)
+
+        return self._merge_modalities(
+            acoustic_embeddings,
+            text_embeddings,
+            input_ids,
+            labels=labels,
+            input_attention_mask=input_attention_mask,
+            dtype=compute_type,
+        )
+
+    def aggregate_temporal_features(
+        self,
+        vectors: torch.Tensor,
+        input_ids: torch.Tensor,
+    ):
+        audio_start_location = torch.where(input_ids == self.config.audio_token_id)[1]+1
+        audio_end_location = torch.where(input_ids == self.config.audio_end_token_id)[1]-1
+        num_vectors = audio_end_location - audio_start_location
+        temporal_dim = input_ids.size(1)
+
+        aggregated = []
+        for i, target_length in enumerate(num_vectors):
+            agg = super().aggregate_temporal_features(vectors[None, target_length], num_vectors[i])
+            agg = F.pad(
+                agg,
+                (0, 0, audio_start_location[i] + 1, temporal_dim - audio_start_location[i] - target_length - 1),
+                "constant",
+                0,
+            )
+            aggregated.append(agg)
+
+        return torch.stack(aggregated)
+
+    def _merge_modalities(
+        self,
+        audio_features,
+        inputs_embeds,
+        input_ids,
+        input_attention_mask,
+        labels: Union[torch.Tensor, None],
+    ) -> Dict[str, torch.Tensor]:
+        
+        output_embeds = inputs_embeds * self.alpha + audio_features * self.beta
+
+        def remove_audio_tokens(vector_sequence):
+            audio_tokens = (input_ids == self.config.audio_token_id) | (input_ids == self.config.audio_end_token_id)
+            bs, ts, fs = vector_sequence.size()
+            return vector_sequence[~audio_tokens].view(bs, ts - 2, fs)
+        
+        final_embedding = remove_audio_tokens(output_embeds)
+        final_attention_mask = remove_audio_tokens(input_attention_mask)
+        final_labels = None
+        if labels is not None:
+            final_labels = remove_audio_tokens(labels)
+
+        return {
+            "inputs_embeds": final_embedding,
+            "attention_mask": final_attention_mask,
+            "labels": final_labels,
         }
 

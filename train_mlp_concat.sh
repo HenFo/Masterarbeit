@@ -20,7 +20,7 @@ output_path=$OUTPUT_PATH"stage_2/"
 
 if [ $TEST_ONLY = False ]; then
     # echo "Running stage 1"
-    # accelerate launch main.py \
+    # accelerate launch ./run_scripts/main.py \
     #     --batch_size 2 \
     #     --gradient_accumulation_steps 16 \
     #     --llm_id $LANGUAGE_MODEL \
@@ -43,7 +43,7 @@ if [ $TEST_ONLY = False ]; then
     #     exit 1
     # fi
     echo "Running stage 2"
-    accelerate launch main.py \
+    accelerate launch ./run_scripts/main.py \
         --batch_size 2 \
         --gradient_accumulation_steps 16 \
         --llm_id $LANGUAGE_MODEL \
@@ -79,7 +79,7 @@ if [ $TEST_ONLY = False ]; then
 fi
 
 echo "Running evaluation"
-python main.py \
+python ./run_scripts/main.py \
     --evaluation True \
     --llm_id $LANGUAGE_MODEL \
     --acoustic_id $ACOUSTIC_MODEL \

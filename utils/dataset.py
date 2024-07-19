@@ -153,20 +153,22 @@ class MeldDataset(Dataset):
         dataset_path: str,
         mode,
         task: str = "normal",
+        audio_placement:str = "target",
         mix_rate: float = 0.1,
         target_sample_rate: int = 16000,
         window: int = 5,
-        data_percentage: float = 1.0,
         include_audio_percentage: float = 1.0,
         include_target_text_percentage: float = 1.0,
     ):
         assert mode in ["train", "dev", "test"]
         assert task in ["normal", "speaker", "emotion", "mixed"]
+        assert audio_placement in ["target", "front", "enclose"]
         self.mode = mode
         self.dataset_path = dataset_path
         self.target_sample_rate = target_sample_rate
         self.window = window
         self.task = task
+        self.audio_placement = audio_placement
         self.mix_rate = mix_rate
         self.include_audio_percentage = include_audio_percentage
         self.include_target_text_percentage = include_target_text_percentage
@@ -304,9 +306,16 @@ class MeldDataset(Dataset):
         target = dialog.iloc[-1]
         instruction = f"Please select the emotional label of <{target['Speaker']}: "
         if include_audio:
-            instruction += "<audio>"
+            if self.audio_placement == "target":
+                instruction += "<audio>"
+            if self.audio_placement == "front":
+                dialog_chain = f"<audio> {dialog_chain}"
         if include_text:
-            instruction += f"\"{target['Utterance']}\""
+            if include_audio and self.audio_placement == "enclose":
+                instruction += f"\"<audio> {target['Utterance']} </audio>\""
+            else:
+                instruction += f"\"{target['Utterance']}\""
+            
         instruction += f"> from <{self.emotions}>:"
 
         prompt = f"Now you are expert of sentiment and emotional analysis. The following conversation noted between '### ###' involves several speaker. ### {dialog_chain} ### {instruction}"
@@ -314,12 +323,8 @@ class MeldDataset(Dataset):
 
 
 if __name__ == "__main__":
-    PATH = "/home/fock/code/MultiModalInstructERC/meld/test_sent_emo.csv"
+    PATH = "/home/fock/code/MultiModalInstructERC/datasets/meld/test_sent_emo.csv"
     tasks = ["normal", "speaker", "emotion", "mixed"]
-    ds = MeldDataset(PATH, mode="test", window=10)
-    print(ds.dataset[ds.dataset["corrupt"]])
-    for t in tasks:
-        print(t)
-        ds.task = t
-        print(ds[6])
-        print("########################\n")
+    ds = MeldDataset(PATH, mode="test", window=3, task="normal", audio_placement="enclose")
+    print(ds[0])
+    

@@ -4,3 +4,4 @@ experiments/**/*
 Schmierblatt.ipynb
 */**/__pycache__
 .conda
+results/llm/*
