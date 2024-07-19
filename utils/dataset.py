@@ -157,6 +157,8 @@ class MeldDataset(Dataset):
         target_sample_rate: int = 16000,
         window: int = 5,
         data_percentage: float = 1.0,
+        include_audio_percentage: float = 1.0,
+        include_target_text_percentage: float = 1.0,
     ):
         assert mode in ["train", "dev", "test"]
         assert task in ["normal", "speaker", "emotion", "mixed"]
@@ -166,6 +168,8 @@ class MeldDataset(Dataset):
         self.window = window
         self.task = task
         self.mix_rate = mix_rate
+        self.include_audio_percentage = include_audio_percentage
+        self.include_target_text_percentage = include_target_text_percentage
         self.dataset: pd.DataFrame = self._prepare_dataset(dataset_path)
         self.emotions = "surprise, anger, neutral, joy, sadness, fear, disgust"
         self.speaker = "Speaker_0, Speaker_1, Speaker_2, Speaker_3, Speaker_4, Speaker_5, Speaker_6, Speaker_7"
@@ -206,7 +210,9 @@ class MeldDataset(Dataset):
             text = self._generate_input(history, include_audio=False)
         else:
             audio = self._get_audio(history.iloc[-1])
-            text = self._generate_input(history)
+            include_audio = np.random.random() < self.include_audio_percentage
+            include_text = np.random.random() < self.include_target_text_percentage or not include_audio
+            text = self._generate_input(history, include_audio, include_text)
         return audio, text
 
     def _get_history(self, index) -> pd.DataFrame:

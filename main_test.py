@@ -1,19 +1,15 @@
 import json
-import math
 from dataclasses import dataclass
 import os
 
 from sklearn.metrics import f1_score
 import torch
-from accelerate import Accelerator
-from torch.optim import AdamW
-from torch.utils.data import DataLoader, SequentialSampler
+from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import (
     AutoConfig,
     AutoProcessor,
     AutoTokenizer,
-    get_linear_schedule_with_warmup,
     LlamaTokenizerFast,
 )
 from utils import (
@@ -23,7 +19,7 @@ from utils import (
     MmLlamaProcessor,
     SequenceClassificationCollator,
 )
-from peft import LoraConfig, get_peft_model, PeftModel
+from peft import PeftModel
 import torch.nn as nn
 import argparse
 
@@ -63,6 +59,8 @@ def parse_args():
     parser.add_argument("--acoustic_id", type=str, default=None)
     parser.add_argument("--output_path", type=str, default=None)
     parser.add_argument("--test_dataset", type=str, default=None)
+    parser.add_argument("--window_size", type=str, default=None)
+
     args = parser.parse_args()
     return Args(**vars(args))
 

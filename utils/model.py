@@ -134,7 +134,7 @@ class MmLlama(nn.Module):
         **kwargs,
     ):
         inputs = self._get_inputs(text, acoustic)
-        return self.llama(**inputs)
+        return self.llama(**inputs, output_attentions=True)
     
     def freeze_llm(self):
         for param in self.llama.parameters():
@@ -164,7 +164,7 @@ class MmLlama(nn.Module):
     def _get_inputs(
         self,
         text: Dict[str, torch.Tensor],
-        acoustic: Dict[str, Union[torch.Tensor, None]] = None,
+        acoustic: Dict[str, Union[torch.Tensor, None]] | None = None,
     ) -> Dict[str, torch.Tensor]:
         input_ids, input_attention_mask, labels = (
             text["input_ids"],

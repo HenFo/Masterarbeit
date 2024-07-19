@@ -1,6 +1,8 @@
 from utils import MeldDataset, SequenceClassificationCollator, MmLlamaProcessor
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoConfig, AutoProcessor, AutoModel
+from tqdm.auto import tqdm
+from accelerate import Accelerator
 
 LANGUAGE_MODEL = "/home/fock/code/MultiModalInstructERC/models/language/LLaMA2"
 LORA_ADAPTER = "/home/fock/code/MultiModalInstructERC/models/language/adapter/InstructERC_unbalanced"
@@ -9,6 +11,7 @@ OUTPUT_PATH = "/home/fock/code/MultiModalInstructERC/experiments/multimodal/mlp/
 DS_TRAIN_PATH = "/home/fock/code/MultiModalInstructERC/datasets/meld/train_sent_emo.csv"
 DS_DEV_PATH = "/home/fock/code/MultiModalInstructERC/datasets/meld/dev_sent_emo.csv"
 DS_TEST_PATH = "/home/fock/code/MultiModalInstructERC/datasets/meld/test_sent_emo.csv"
+
 
 
 tokenizer = AutoTokenizer.from_pretrained(LANGUAGE_MODEL)
@@ -29,16 +32,16 @@ train_dataloader = DataLoader(
     collate_fn=SequenceClassificationCollator(processor, mode="train"),
 )
 
-wave2vec2 = AutoModel.from_pretrained(ac_config._name_or_path)
+wave2vec2 = AutoModel.from_pretrained(ac_config._name_or_path).cuda()
 
-# processed_sizes = [wave2vec2(**batch["acoustic"]).last_hidden_state.size()[1] for batch in train_dataloader]
-# processed_sizes.sort()
-# processed_sizes
 
-for batch in train_dataloader:
-    # print(batch["acoustic"]["input_values"].size())
-    print(wave2vec2(**batch["acoustic"]).last_hidden_state.size()[1])
-    break
-    
+processed_sizes = []
+for batch in tqdm(train_dataloader):
+    acoustic_inputs = batch["acoustic"]
+    acoustic_inputs = {k: v.cuda() for k, v in acoustic_inputs.items()}
+    last_hidden_state = wave2vec2(**acoustic_inputs).last_hidden_state
+    size = last_hidden_state.size()[1]
+    processed_sizes.append(size)
+processed_sizes.sort(reverse=True)
+print(processed_sizes)
 
-# train_dataset[0]

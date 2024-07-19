@@ -14,6 +14,7 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     get_linear_schedule_with_warmup,
+    get_constant_schedule_with_warmup,
     LlamaTokenizerFast,
 )
 from utils import (
@@ -27,13 +28,13 @@ from peft import LoraConfig, get_peft_model, PeftModel
 import torch.nn as nn
 import argparse
 
-LANGUAGE_MODEL = "/home/fock/code/MultiModalInstructERC/models/language/LLaMA2"
-LORA_ADAPTER = "/home/fock/code/MultiModalInstructERC/models/language/adapter/InstructERC_unbalanced"
-ACOUSTIC_MODEL = "/home/fock/code/MultiModalInstructERC/models/acoustic/wav2vec2/wav2vec2-large-robust-12-ft-emotion-msp-dim"
-OUTPUT_PATH = "/home/fock/code/MultiModalInstructERC/experiments/multimodal/mlp/concat/"
-DS_TRAIN_PATH = "/home/fock/code/MultiModalInstructERC/datasets/meld/train_sent_emo.csv"
-DS_DEV_PATH = "/home/fock/code/MultiModalInstructERC/datasets/meld/dev_sent_emo.csv"
-DS_TEST_PATH = "/home/fock/code/MultiModalInstructERC/datasets/meld/test_sent_emo.csv"
+# LANGUAGE_MODEL = "/home/fock/code/MultiModalInstructERC/models/language/LLaMA2"
+# LORA_ADAPTER = "/home/fock/code/MultiModalInstructERC/models/language/adapter/InstructERC_unbalanced"
+# ACOUSTIC_MODEL = "/home/fock/code/MultiModalInstructERC/models/acoustic/wav2vec2/wav2vec2-large-robust-12-ft-emotion-msp-dim"
+# OUTPUT_PATH = "/home/fock/code/MultiModalInstructERC/experiments/multimodal/mlp/concat/"
+# DS_TRAIN_PATH = "/home/fock/code/MultiModalInstructERC/datasets/meld/train_sent_emo.csv"
+# DS_DEV_PATH = "/home/fock/code/MultiModalInstructERC/datasets/meld/dev_sent_emo.csv"
+# DS_TEST_PATH = "/home/fock/code/MultiModalInstructERC/datasets/meld/test_sent_emo.csv"
 
 
 @dataclass()
@@ -65,6 +66,9 @@ class Args:
     lora_module_name: str = ".*?llama.*?[qkvo]_proj"
     resume_training: bool = False
     window_size: int = 5
+    time_till_aux: int = epochs
+    include_target_text_percentage_decay: float = 0.3
+    do_auxilary_task: bool = False
 
 
 def parse_args():
@@ -90,19 +94,26 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--warmup_ratio", type=float, default=0.1)
     parser.add_argument("--weight_decay", type=float, default=0)
-    parser.add_argument("--train_llm", type=bool, default=False)
+    parser.add_argument("--train_llm", action="store_true")
     parser.add_argument("--lora_dim", type=int, default=16)
     parser.add_argument("--lora_alpha", type=int, default=32)
     parser.add_argument("--lora_dropout", type=float, default=0.1)
     parser.add_argument(
         "--lora_module_name", type=str, default=".*?llama.*?[qkvo]_proj"
     )
-    parser.add_argument("--resume_training", type=bool, default=False)
+    parser.add_argument("--resume_training", action="store_true")
+    parser.add_argument("--time_till_aux", type=int, default=15)
+    parser.add_argument(
+        "--include_target_text_percentage_decay", type=float, default=0.3
+    )
+    parser.add_argument("--do_auxilary_task", action="store_true")
     args = parser.parse_args()
     return Args(**vars(args))
 
 
 args = parse_args()
+
+print(args)
 
 
 # args = Args(
@@ -122,7 +133,7 @@ args = parse_args()
 #     lr=1e-5,
 #     train_llm=True,
 #     resume_training=False,
-#     stage=2
+#     stage=1
 # )
 
 
@@ -151,8 +162,11 @@ def get_grouped_parameters(model):
 
 def get_scheduler(optimizer, len_dataset, batch_size, epochs):
     num_steps = math.ceil(len_dataset / batch_size)
-    num_steps *= epochs
+    num_steps *= epochs + 3
     warmup_steps = math.ceil(num_steps * args.warmup_ratio)
+    # scheduler = get_constant_schedule_with_warmup(
+    #     optimizer, num_warmup_steps=warmup_steps
+    # )
     scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=warmup_steps, num_training_steps=num_steps
     )
@@ -207,9 +221,9 @@ def load_model_for_stage_2(model: nn.Module):
 
 def load_model_for_test(model: nn.Module):
     model.load_state_dict(torch.load(os.path.join(args.output_path, "best_model.pth")))
-    model = PeftModel.from_pretrained(model, args.output_path, is_trainable=False)
-    model = model.merge_and_unload(progressbar=True)
-    return model
+    # model = PeftModel.from_pretrained(model, args.output_path, is_trainable=False)
+    # model = model.merge_and_unload(progressbar=True)
+    return model.cuda()
 
 
 def create_folder_if_not_exists(path):
@@ -241,11 +255,20 @@ def train():
     )
 
     ## setup datasets
+    include_text = 0 if args.stage == 2 and args.do_auxilary_task else 1
     train_dataset = MeldDataset(
-        args.train_dataset, mode="train", task=args.task, window=args.window_size
+        args.train_dataset,
+        mode="train",
+        task=args.task,
+        window=args.window_size,
+        include_target_text_percentage=include_text,
     )
     eval_dataset = MeldDataset(
-        args.dev_dataset, mode="dev", task="normal", window=args.window_size
+        args.dev_dataset,
+        mode="dev",
+        task="normal",
+        window=args.window_size,
+        include_target_text_percentage=include_text,
     )
     # test_dataset = MeldDataset(args.test_dataset, mode="test", task="normal")
 
@@ -272,9 +295,10 @@ def train():
         model, optimizer, lr_scheduler, train_dataloader
     )
 
-
     # training loop
-    best_f1 = 0
+    best_eval_loss = float("inf")
+    train_losses = []
+    eval_losses = []
     for epoch in range(args.epochs):
         epoch += 1
         model.train()
@@ -283,16 +307,17 @@ def train():
             total=len(train_dataloader),
             desc=f"Epoch {epoch}",
         )
+        running_loss = 0
         for step, batch in batch_iterator:
             try:
                 with accelerator.accumulate(model):
                     outputs = model(**batch)
                     loss = outputs["loss"]
+                    running_loss += loss.item()
 
                     accelerator.backward(loss)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    # torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                     optimizer.step()
-                    lr_scheduler.step()
                     optimizer.zero_grad()
 
                 batch_iterator.set_description(
@@ -304,25 +329,76 @@ def train():
                 print("Audio size", batch["acoustic"]["input_values"].size())
                 torch.cuda.empty_cache()
 
+        lr_scheduler.step()
+        running_loss /= len(train_dataloader)
+        train_losses.append(running_loss)
         # evaluation
         eval_dataloader = DataLoader(
             eval_dataset,
-            batch_size=args.eval_batch_size,
+            batch_size=args.batch_size,
             shuffle=False,
             num_workers=4,
-            collate_fn=SequenceClassificationCollator(processor, mode="dev"),
+            collate_fn=SequenceClassificationCollator(processor, mode="train"),
             sampler=SequentialSampler(eval_dataset),
         )
 
+        if args.do_auxilary_task:
+            set_auxilary_changes(
+                model=model,
+                train_dataloader=train_dataloader,
+                eval_dataloader=eval_dataloader,
+                epoch=epoch,
+            )
+
         if accelerator.is_main_process:
-            f1 = evaluate(accelerator, tokenizer, model, epoch, eval_dataloader)
-            if f1 > best_f1:
+            eval_loss = evaluate(accelerator, model, epoch, eval_dataloader)
+            eval_losses.append(eval_loss)
+            if eval_loss < best_eval_loss:
                 print("Saving model")
-                best_f1 = f1
-                print(f"Best F1: {best_f1}")
+                best_eval_loss = eval_loss
+                print(f"Best Loss: {best_eval_loss}")
                 save_model(accelerator, tokenizer, model)
                 print("model saved")
+
+            with open(os.path.join(args.output_path, "train_losses.json"), "wt") as f:
+                json.dump(train_losses, f)
+            with open(os.path.join(args.output_path, "eval_losses.json"), "wt") as f:
+                json.dump(eval_losses, f)
+
         accelerator.wait_for_everyone()
+
+
+def set_auxilary_changes(**kwargs):
+    if args.stage == 1:
+        set_stage_1_changes(**kwargs)
+    elif args.stage == 2:
+        set_stage_2_changes(**kwargs)
+
+
+def set_stage_1_changes(train_dataloader, epoch, **kwargs):
+    if epoch > args.time_till_aux:
+        # reduce dataset.include_target_text_percentage linearly to 0.3 till end of training
+
+        end = args.include_target_text_percentage_decay
+        percentage = end + (1 - end) * (
+            1 - ((epoch - args.time_till_aux) / (args.epochs - args.time_till_aux))
+        )
+        print("Setting include_target_text_percentage on training data to", percentage)
+        train_dataloader.dataset.include_target_text_percentage = percentage
+
+
+def set_stage_2_changes(eval_dataloader, train_dataloader, epoch, **kwargs):
+    eval_dataloader.dataset.include_target_text_percentage = 0
+    if epoch > args.time_till_aux:
+        # increase dataset.include_target_text_percentage linearly to 0.3 till end of training
+
+        eval_dataloader.dataset.include_target_text_percentage = 1
+        start = args.include_target_text_percentage_decay
+        percentage = start + (1 - start) * (
+            (epoch - args.time_till_aux) / (args.epochs - args.time_till_aux)
+        )
+        print("Setting include_target_text_percentage on training data to", percentage)
+        train_dataloader.dataset.include_target_text_percentage = percentage
 
 
 def save_model(accelerator, tokenizer, model):
@@ -337,8 +413,14 @@ def save_model(accelerator, tokenizer, model):
     tokenizer.save_pretrained(args.output_path)
 
 
+def prepare_batch(batch: dict[str, dict[str, torch.Tensor]]):
+    for k in batch:
+        for kk in batch[k]:
+            batch[k][kk] = batch[k][kk].cuda()
+    return batch
+
+
 def test():
-    accelerator = Accelerator(mixed_precision=args.mixed_precision)
     # Load configurations
     llm_config = AutoConfig.from_pretrained(args.llm_id)
     ac_config = AutoConfig.from_pretrained(args.acoustic_id)
@@ -360,7 +442,7 @@ def test():
     model = load_model_for_test(model)
 
     ## setup datasets
-    test_dataset = MeldDataset(args.test_dataset, mode="test", task="normal")
+    test_dataset = MeldDataset(args.test_dataset, mode="test", task="normal", include_target_text_percentage=1)
 
     test_dataloader = DataLoader(
         test_dataset,
@@ -370,19 +452,34 @@ def test():
         collate_fn=SequenceClassificationCollator(processor, mode="dev"),
     )
     # get model
-    model, test_dataloader = accelerator.prepare(model, test_dataloader)
-    if accelerator.is_main_process:
-        evaluate(accelerator, tokenizer, model, -1, test_dataloader)
+    evaluate_f1(tokenizer, model, test_dataloader)
 
 
 def evaluate(
     accelerator: Accelerator,
-    tokenizer: LlamaTokenizerFast,
     model: MmLlama,
     epoch: int,
     dataloader: DataLoader,
 ):
     dataloader = accelerator.prepare(dataloader)
+    eval_batch_iterator = tqdm(dataloader, total=len(dataloader), desc="Evaluating")
+    running_loss = 0
+    model.eval()
+    for step, batch in enumerate(eval_batch_iterator):
+        with torch.no_grad():
+            outputs = model(**batch)
+            loss = outputs["loss"]
+            running_loss += loss.item()
+    running_loss /= len(dataloader)
+    print(f"Loss in Epoch {epoch}: {running_loss}")
+    return running_loss
+
+
+def evaluate_f1(
+    tokenizer: LlamaTokenizerFast,
+    model: MmLlama,
+    dataloader: DataLoader,
+):
     eval_batch_iterator = tqdm(dataloader, total=len(dataloader), desc="Evaluating")
     all_targets = []
     all_preds = []
@@ -391,6 +488,7 @@ def evaluate(
     for inputs, labels in eval_batch_iterator:
         with torch.no_grad():
             try:
+                inputs = prepare_batch(inputs)
                 preds = model.generate(**inputs)
             except TimeoutError:
                 print("TimeoutError on input", inputs)
@@ -425,10 +523,10 @@ def evaluate(
                 "target": target,
             }
         )
-    with open(os.path.join(args.output_path, f"preds_epoch_{epoch}.json"), "wt") as f:
+    with open(os.path.join(args.output_path, "preds_test.json"), "wt") as f:
         json.dump(preds_for_eval, f)
 
-    print(f"F1 in Epoch {epoch}: {f1}")
+    print(f"F1 in Test: {f1}")
     return f1
 
 
