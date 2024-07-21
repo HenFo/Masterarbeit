@@ -311,7 +311,7 @@ class MeldDataset(Dataset):
             if self.audio_placement == "front":
                 dialog_chain = f"<audio> {dialog_chain}"
         if include_text:
-            if include_audio and self.audio_placement == "enclose":
+            if self.audio_placement == "enclose":
                 instruction += f"\"<audio> {target['Utterance']} </audio>\""
             else:
                 instruction += f"\"{target['Utterance']}\""
