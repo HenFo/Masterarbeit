@@ -1,10 +1,10 @@
 #!/bin/bash
 
-TEST_ONLY=True
+TEST_ONLY=False
 
-WINDOW=10
+WINDOW=5
 
-experiment="mlp/concat/interpolate"
+experiment="mlp/merge/interpolate"
 
 LANGUAGE_MODEL="/home/fock/code/MultiModalInstructERC/models/language/LLaMA2"
 LORA_ADAPTER="/home/fock/code/MultiModalInstructERC/models/language/adapter/InstructERC_unbalanced"
@@ -19,33 +19,34 @@ stage_1_path=$OUTPUT_PATH"stage_1/"
 output_path=$OUTPUT_PATH"stage_2/"
 
 if [ $TEST_ONLY = False ]; then
-    # echo "Running stage 1"
-    # accelerate launch ./run_scripts/main_concat.py \
-    #     --batch_size 2 \
-    #     --gradient_accumulation_steps 16 \
-    #     --llm_id $LANGUAGE_MODEL \
-    #     --acoustic_id $ACOUSTIC_MODEL \
-    #     --adapter_id $LORA_ADAPTER \
-    #     --output_path $stage_1_path \
-    #     --train_dataset $DS_TRAIN_PATH \
-    #     --test_dataset $DS_TEST_PATH \
-    #     --dev_dataset $DS_DEV_PATH \
-    #     --task "normal" \
-    #     --deepspeed_config "deepspeed_config.json" \
-    #     --epochs 20 \
-    #     --time_till_aux 7 \
-    #     --lr 2e-5 \
-    #     --stage 1 \
-    #     --window_size $WINDOW
+    echo "Running stage 1"
+    accelerate launch ./run_scripts/main_merge.py \
+        --batch_size 4 \
+        --gradient_accumulation_steps 8 \
+        --llm_id $LANGUAGE_MODEL \
+        --acoustic_id $ACOUSTIC_MODEL \
+        --adapter_id $LORA_ADAPTER \
+        --output_path $stage_1_path \
+        --train_dataset $DS_TRAIN_PATH \
+        --test_dataset $DS_TEST_PATH \
+        --dev_dataset $DS_DEV_PATH \
+        --task "normal" \
+        --deepspeed_config "deepspeed_config.json" \
+        --epochs 30 \
+        --lr 2e-4 \
+        --stage 1 \
+        --window_size $WINDOW
 
-    # if [ $? -ne 0 ]; then
-    #     echo "An error occurred. Terminating."
-    #     exit 1
-    # fi
+
+    if [ $? -ne 0 ]; then
+        echo "An error occurred. Terminating."
+        exit 1
+    fi
+
     echo "Running stage 2"
-    accelerate launch ./run_scripts/main_concat.py \
-        --batch_size 2 \
-        --gradient_accumulation_steps 16 \
+    accelerate launch ./run_scripts/main_merge.py \
+        --batch_size 4 \
+        --gradient_accumulation_steps 8 \
         --llm_id $LANGUAGE_MODEL \
         --acoustic_id $ACOUSTIC_MODEL \
         --adapter_id $LORA_ADAPTER \
@@ -57,29 +58,26 @@ if [ $TEST_ONLY = False ]; then
         --task "normal" \
         --deepspeed_config "deepspeed_config.json" \
         --epochs 20 \
-        --lr 2e-5 \
+        --lr 2e-4 \
         --train_llm \
         --stage 2 \
         --window_size $WINDOW \
-        --lora_dim 32 \
+        --lora_dim 16 \
         --lora_alpha 32 \
-        --lora_dropout 0.1 
+        --lora_dropout 0.1 \
         # --do_auxilary_task \
         # --time_till_aux 10 \
-        # --include_target_text_percentage_decay 0.3
 
     if [ $? -ne 0 ]; then
         echo "An error occurred. Terminating."
         exit 1
     fi
-    
-    cp $stage_1_path"best_model.pth" $output_path"best_model.pth"
 
 
 fi
 
 echo "Running evaluation"
-python ./run_scripts/main_concat.py \
+python ./run_scripts/main_merge.py \
     --evaluation True \
     --llm_id $LANGUAGE_MODEL \
     --acoustic_id $ACOUSTIC_MODEL \

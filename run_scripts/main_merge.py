@@ -14,7 +14,6 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     get_linear_schedule_with_warmup,
-    get_constant_schedule_with_warmup,
     LlamaTokenizerFast,
 )
 from utils import (
@@ -27,6 +26,8 @@ from utils import (
 from peft import LoraConfig, get_peft_model, PeftModel
 import torch.nn as nn
 import argparse
+
+from utils.model import MmLlamaMerge
 
 # LANGUAGE_MODEL = "/home/fock/code/MultiModalInstructERC/models/language/LLaMA2"
 # LORA_ADAPTER = "/home/fock/code/MultiModalInstructERC/models/language/adapter/InstructERC_unbalanced"
@@ -67,8 +68,8 @@ class Args:
     resume_training: bool = False
     window_size: int = 5
     time_till_aux: int = epochs
-    include_target_text_percentage_decay: float = 0.3
     do_auxilary_task: bool = False
+    alpha: float = 1.0
 
 
 def parse_args():
@@ -103,10 +104,8 @@ def parse_args():
     )
     parser.add_argument("--resume_training", action="store_true")
     parser.add_argument("--time_till_aux", type=int, default=15)
-    parser.add_argument(
-        "--include_target_text_percentage_decay", type=float, default=0.3
-    )
     parser.add_argument("--do_auxilary_task", action="store_true")
+    parser.add_argument("--alpha", type=float, default=1.0)
     args = parser.parse_args()
     return Args(**vars(args))
 
@@ -164,9 +163,6 @@ def get_scheduler(optimizer, len_dataset, batch_size, epochs):
     num_steps = math.ceil(len_dataset / batch_size)
     num_steps *= epochs + 3
     warmup_steps = math.ceil(num_steps * args.warmup_ratio)
-    # scheduler = get_constant_schedule_with_warmup(
-    #     optimizer, num_warmup_steps=warmup_steps
-    # )
     scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=warmup_steps, num_training_steps=num_steps
     )
@@ -175,7 +171,7 @@ def get_scheduler(optimizer, len_dataset, batch_size, epochs):
 
 def load_tokenizer():
     tokenizer = AutoTokenizer.from_pretrained(args.llm_id)
-    tokenizer.add_special_tokens({"additional_special_tokens": ["<audio>"]})
+    tokenizer.add_special_tokens({"additional_special_tokens": ["<audio>", "</audio>"]})
     tokenizer.pad_token_id = tokenizer.unk_token_id
     tokenizer.padding_side = "left"
     return tokenizer
@@ -191,11 +187,13 @@ def load_model_for_stage(model: nn.Module, stage: int):
 
 
 def load_model_for_stage_1(model: nn.Module):
+    """Load model for stage 1 training (Projector training)"""
     if args.resume_training:
         model.load_state_dict(
             torch.load(os.path.join(args.output_path, "best_model.pth"))
         )
     model.freeze_encoder()
+    model.freeze_scaling()
     return model
 
 
@@ -216,13 +214,19 @@ def load_model_for_stage_2(model: nn.Module):
         )
         model = get_peft_model(model, lora_config)
     # model.unfreeze_projector()
+    
+    # Override the state_dict method to forward additional parameters
+    def lora_state_dict(self, modules=None, **kwargs):
+        return self.model.state_dict(modules=modules, **kwargs)
+	
+    model.state_dict = lora_state_dict.__get__(model, type(model))
     return model
 
 
 def load_model_for_test(model: nn.Module):
     model.load_state_dict(torch.load(os.path.join(args.output_path, "best_model.pth")))
-    # model = PeftModel.from_pretrained(model, args.output_path, is_trainable=False)
-    # model = model.merge_and_unload(progressbar=True)
+    model = PeftModel.from_pretrained(model, args.output_path, is_trainable=False)
+    model = model.merge_and_unload(progressbar=True)
     return model.cuda()
 
 
@@ -230,6 +234,31 @@ def create_folder_if_not_exists(path):
     if not os.path.exists(path):
         os.makedirs(path)
 
+def setup_config_and_processor():
+        # Load configurations
+        llm_config = AutoConfig.from_pretrained(args.llm_id)
+        ac_config = AutoConfig.from_pretrained(args.acoustic_id)
+        ac_processor = AutoProcessor.from_pretrained(args.acoustic_id)
+
+        # setup of tokenizer
+        tokenizer = load_tokenizer()
+
+        # setup of processor
+        processor = MmLlamaProcessor(ac_processor, tokenizer)
+
+        ## setup of config
+        audio_start_token_id = tokenizer.additional_special_tokens_ids[0]
+        audio_end_token_id = tokenizer.additional_special_tokens_ids[1]
+        config = MmLlamaConfig(
+            llm_config=llm_config,
+            audio_config=ac_config,
+            audio_token_id=audio_start_token_id,
+            audio_end_token_id=audio_end_token_id,
+            pad_token_id=tokenizer.pad_token_id,
+            llm_pretrained_adapter=args.adapter_id,
+        )
+        
+        return tokenizer, processor, config
 
 def train():
     accelerator = Accelerator(
@@ -237,40 +266,24 @@ def train():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
     )
 
-    # Load configurations
-    llm_config = AutoConfig.from_pretrained(args.llm_id)
-    ac_config = AutoConfig.from_pretrained(args.acoustic_id)
-    ac_processor = AutoProcessor.from_pretrained(args.acoustic_id)
 
-    # setup of tokenizer
-    tokenizer = load_tokenizer()
-
-    # setup of processor
-    processor = MmLlamaProcessor(ac_processor, tokenizer)
-
-    ## setup of config
-    audio_token_id = tokenizer.additional_special_tokens_ids[0]
-    config = MmLlamaConfig(
-        llm_config, ac_config, audio_token_id, tokenizer.pad_token_id, args.adapter_id
-    )
+    tokenizer, processor, config = setup_config_and_processor()
 
     ## setup datasets
-    include_text = 0 if args.stage == 2 and args.do_auxilary_task else 1
     train_dataset = MeldDataset(
         args.train_dataset,
         mode="train",
         task=args.task,
         window=args.window_size,
-        include_target_text_percentage=include_text,
+        audio_placement="enclose",
     )
     eval_dataset = MeldDataset(
         args.dev_dataset,
         mode="dev",
         task="normal",
         window=args.window_size,
-        include_target_text_percentage=include_text,
+        audio_placement="enclose",
     )
-    # test_dataset = MeldDataset(args.test_dataset, mode="test", task="normal")
 
     train_dataloader = DataLoader(
         train_dataset,
@@ -280,7 +293,7 @@ def train():
         collate_fn=SequenceClassificationCollator(processor, mode="train"),
     )
     # get model
-    model = MmLlamaConcat(config, train_llm=args.train_llm)
+    model = MmLlamaMerge(config, train_llm=args.train_llm, alpha=args.alpha)
     model = load_model_for_stage(model, args.stage)
 
     # setup optimizer
@@ -376,38 +389,20 @@ def set_auxilary_changes(**kwargs):
 
 
 def set_stage_1_changes(train_dataloader, epoch, **kwargs):
+    pass
+
+
+def set_stage_2_changes(model, epoch, **kwargs):
     if epoch > args.time_till_aux:
-        # reduce dataset.include_target_text_percentage linearly to 0.3 till end of training
-
-        end = args.include_target_text_percentage_decay
-        percentage = end + (1 - end) * (
-            1 - ((epoch - args.time_till_aux) / (args.epochs - args.time_till_aux))
-        )
-        print("Setting include_target_text_percentage on training data to", percentage)
-        train_dataloader.dataset.include_target_text_percentage = percentage
-
-
-def set_stage_2_changes(eval_dataloader, train_dataloader, epoch, **kwargs):
-    eval_dataloader.dataset.include_target_text_percentage = 0
-    if epoch > args.time_till_aux:
-        # increase dataset.include_target_text_percentage linearly to 0.3 till end of training
-
-        eval_dataloader.dataset.include_target_text_percentage = 1
-        start = args.include_target_text_percentage_decay
-        percentage = start + (1 - start) * (
-            (epoch - args.time_till_aux) / (args.epochs - args.time_till_aux)
-        )
-        print("Setting include_target_text_percentage on training data to", percentage)
-        train_dataloader.dataset.include_target_text_percentage = percentage
+        model.unfreeze_scaling()
 
 
 def save_model(accelerator, tokenizer, model):
     unwrapped_model = accelerator.unwrap_model(model)
-    if args.stage == 1:
-        torch.save(
-            unwrapped_model.state_dict(),
-            os.path.join(args.output_path, "best_model.pth"),
-        )
+    torch.save(
+        unwrapped_model.state_dict(modules=["projector", "alpha"]),
+        os.path.join(args.output_path, "best_model.pth"),
+    )
     if args.train_llm:
         model.save_pretrained(args.output_path)
     tokenizer.save_pretrained(args.output_path)
@@ -421,28 +416,18 @@ def prepare_batch(batch: dict[str, dict[str, torch.Tensor]]):
 
 
 def test():
-    # Load configurations
-    llm_config = AutoConfig.from_pretrained(args.llm_id)
-    ac_config = AutoConfig.from_pretrained(args.acoustic_id)
-    ac_processor = AutoProcessor.from_pretrained(args.acoustic_id)
+    tokenizer, processor, config = setup_config_and_processor()
 
-    # setup of tokenizer
-    tokenizer = load_tokenizer()
-
-    # setup of processor
-    processor = MmLlamaProcessor(ac_processor, tokenizer)
-
-    ## setup of config
-    audio_token_id = tokenizer.additional_special_tokens_ids[0]
-    config = MmLlamaConfig(
-        llm_config, ac_config, audio_token_id, tokenizer.pad_token_id, args.adapter_id
-    )
-
-    model = MmLlamaConcat(config)
+    model = MmLlamaMerge(config)
     model = load_model_for_test(model)
 
     ## setup datasets
-    test_dataset = MeldDataset(args.test_dataset, mode="test", task="normal", include_target_text_percentage=1)
+    test_dataset = MeldDataset(
+        args.test_dataset,
+        mode="test",
+        audio_placement="enclose",
+        task="normal",
+    )
 
     test_dataloader = DataLoader(
         test_dataset,

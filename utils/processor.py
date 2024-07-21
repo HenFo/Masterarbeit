@@ -44,7 +44,7 @@ class MmLlamaProcessor:
         tokenizer_args: dict = {},
     ) -> BatchFeature:
         if acoustic is not None:
-            def clean_audio(acoustic: np.ndarray):
+            def clean_audio(acoustic: np.ndarray|None):
                 if acoustic is None:
                     return np.zeros((4000,))
                 audio_length = acoustic.shape[0]
