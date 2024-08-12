@@ -1,0 +1,5 @@
+**/*.tar.gz
+iemocap/*
+!iemocap/iemocap_to_csv.py
+meld/*
+!**/.gitkeep
