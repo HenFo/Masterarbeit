@@ -1,11 +1,12 @@
 import json
 import math
-from dataclasses import dataclass
 import os
+import sys
+from dataclasses import dataclass
 
-from sklearn.metrics import f1_score
 import torch
 from accelerate import Accelerator
+from sklearn.metrics import f1_score
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, SequentialSampler
 from tqdm.auto import tqdm
@@ -13,21 +14,27 @@ from transformers import (
     AutoConfig,
     AutoProcessor,
     AutoTokenizer,
-    get_linear_schedule_with_warmup,
     LlamaTokenizerFast,
+    get_linear_schedule_with_warmup,
+    get_constant_schedule_with_warmup,
 )
+from accelerate.utils import broadcast_object_list
+
+sys.path.append("/home/fock/code/MultiModalInstructERC")
+import argparse
+
+import torch.nn as nn
+from peft import LoraConfig, PeftModel, get_peft_model
+
 from utils import (
     MeldDataset,
+    MmLlama,
     MmLlamaConcat,
     MmLlamaConfig,
+    MmLlamaMerge,
     MmLlamaProcessor,
     SequenceClassificationCollator,
 )
-from peft import LoraConfig, get_peft_model, PeftModel
-import torch.nn as nn
-import argparse
-
-from utils.model import MmLlamaMerge
 
 # LANGUAGE_MODEL = "/home/fock/code/MultiModalInstructERC/models/language/LLaMA2"
 # LORA_ADAPTER = "/home/fock/code/MultiModalInstructERC/models/language/adapter/InstructERC_unbalanced"
@@ -74,7 +81,7 @@ class Args:
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--evaluation", type=bool, default=False)
+    parser.add_argument("--evaluation", action="store_true")
     parser.add_argument("--llm_id", type=str, default=None)
     parser.add_argument("--adapter_id", type=str, default=None)
     parser.add_argument("--acoustic_id", type=str, default=None)
@@ -100,7 +107,7 @@ def parse_args():
     parser.add_argument("--lora_alpha", type=int, default=32)
     parser.add_argument("--lora_dropout", type=float, default=0.1)
     parser.add_argument(
-        "--lora_module_name", type=str, default=".*?llama.*?[qkvo]_proj"
+        "--lora_module_name", type=str, default=".*?[qkvo]_proj"
     )
     parser.add_argument("--resume_training", action="store_true")
     parser.add_argument("--time_till_aux", type=int, default=15)
@@ -161,11 +168,14 @@ def get_grouped_parameters(model):
 
 def get_scheduler(optimizer, len_dataset, batch_size, epochs):
     num_steps = math.ceil(len_dataset / batch_size)
-    num_steps *= epochs + 3
+    num_steps *= epochs + 2
     warmup_steps = math.ceil(num_steps * args.warmup_ratio)
     scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=warmup_steps, num_training_steps=num_steps
     )
+    # scheduler = get_constant_schedule_with_warmup(
+    #     optimizer, num_warmup_steps=warmup_steps
+    # )
     return scheduler
 
 
@@ -179,54 +189,58 @@ def load_tokenizer():
 
 def load_model_for_stage(model: nn.Module, stage: int):
     if stage == 1:
-        return load_model_for_stage_1(model)
+        return _load_model_for_stage_1(model)
     elif stage == 2:
-        return load_model_for_stage_2(model)
+        return _load_model_for_stage_2(model)
     else:
         raise ValueError("Invalid stage number")
 
 
-def load_model_for_stage_1(model: nn.Module):
+def _load_model_for_stage_1(model: nn.Module):
     """Load model for stage 1 training (Projector training)"""
     if args.resume_training:
         model.load_state_dict(
-            torch.load(os.path.join(args.output_path, "best_model.pth"))
+            torch.load(os.path.join(args.output_path, "best_model.pth")), strict=False
         )
     model.freeze_encoder()
     model.freeze_scaling()
     return model
 
 
-def load_model_for_stage_2(model: nn.Module):
+def _load_model_for_stage_2(model: MmLlama):
     model.load_state_dict(
-        torch.load(os.path.join(args.checkpoint_path, "best_model.pth"))
+        torch.load(os.path.join(args.checkpoint_path, "best_model.pth")), strict=False
     )
-    if args.resume_training:
-        model = PeftModel.from_pretrained(model, args.output_path, is_trainable=True)
-    else:
-        lora_config = LoraConfig(
-            # task_type="CAUSAL_LM",
-            r=args.lora_dim,
-            lora_alpha=args.lora_alpha,
-            lora_dropout=args.lora_dropout,
-            target_modules=args.lora_module_name,
-            bias="none",
-        )
-        model = get_peft_model(model, lora_config)
+    # lora_config = LoraConfig(
+    #     # task_type="CAUSAL_LM",
+    #     r=args.lora_dim,
+    #     lora_alpha=args.lora_alpha,
+    #     lora_dropout=args.lora_dropout,
+    #     target_modules=args.lora_module_name,
+    #     bias="none",
+    # )
+    # model = model.apply_training_lora(lora_config)
     # model.unfreeze_projector()
-    
-    # Override the state_dict method to forward additional parameters
-    def lora_state_dict(self, modules=None, **kwargs):
-        return self.model.state_dict(modules=modules, **kwargs)
-	
-    model.state_dict = lora_state_dict.__get__(model, type(model))
+    model.freeze_encoder()
+    model.freeze_projector()
+
     return model
 
 
-def load_model_for_test(model: nn.Module):
-    model.load_state_dict(torch.load(os.path.join(args.output_path, "best_model.pth")))
-    model = PeftModel.from_pretrained(model, args.output_path, is_trainable=False)
-    model = model.merge_and_unload(progressbar=True)
+# def load_model_for_test(model: nn.Module):
+#     model.load_state_dict(
+#         torch.load(os.path.join(args.output_path, "best_model.pth")), strict=False
+#     )
+#     model = PeftModel.from_pretrained(model, args.output_path, is_trainable=False)
+#     model = model.merge_and_unload(progressbar=True)
+#     return model.cuda()
+
+
+def load_model_for_test(model: MmLlama):
+    model.load_state_dict(
+        torch.load(os.path.join(args.output_path, "best_model.pth")), strict=False
+    )
+    model = model.apply_inference_lora(args.output_path)
     return model.cuda()
 
 
@@ -234,38 +248,39 @@ def create_folder_if_not_exists(path):
     if not os.path.exists(path):
         os.makedirs(path)
 
+
 def setup_config_and_processor():
-        # Load configurations
-        llm_config = AutoConfig.from_pretrained(args.llm_id)
-        ac_config = AutoConfig.from_pretrained(args.acoustic_id)
-        ac_processor = AutoProcessor.from_pretrained(args.acoustic_id)
+    # Load configurations
+    llm_config = AutoConfig.from_pretrained(args.llm_id)
+    ac_config = AutoConfig.from_pretrained(args.acoustic_id)
+    ac_processor = AutoProcessor.from_pretrained(args.acoustic_id)
 
-        # setup of tokenizer
-        tokenizer = load_tokenizer()
+    # setup of tokenizer
+    tokenizer = load_tokenizer()
 
-        # setup of processor
-        processor = MmLlamaProcessor(ac_processor, tokenizer)
+    # setup of processor
+    processor = MmLlamaProcessor(ac_processor, tokenizer)
 
-        ## setup of config
-        audio_start_token_id = tokenizer.additional_special_tokens_ids[0]
-        audio_end_token_id = tokenizer.additional_special_tokens_ids[1]
-        config = MmLlamaConfig(
-            llm_config=llm_config,
-            audio_config=ac_config,
-            audio_token_id=audio_start_token_id,
-            audio_end_token_id=audio_end_token_id,
-            pad_token_id=tokenizer.pad_token_id,
-            llm_pretrained_adapter=args.adapter_id,
-        )
-        
-        return tokenizer, processor, config
+    ## setup of config
+    audio_start_token_id = tokenizer.additional_special_tokens_ids[0]
+    audio_end_token_id = tokenizer.additional_special_tokens_ids[1]
+    config = MmLlamaConfig(
+        llm_config=llm_config,
+        audio_config=ac_config,
+        audio_token_id=audio_start_token_id,
+        audio_end_token_id=audio_end_token_id,
+        pad_token_id=tokenizer.pad_token_id,
+        llm_pretrained_adapter=args.adapter_id,
+    )
+
+    return tokenizer, processor, config
+
 
 def train():
     accelerator = Accelerator(
         mixed_precision=args.mixed_precision,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
     )
-
 
     tokenizer, processor, config = setup_config_and_processor()
 
@@ -312,6 +327,7 @@ def train():
     best_eval_loss = float("inf")
     train_losses = []
     eval_losses = []
+
     for epoch in range(args.epochs):
         epoch += 1
         model.train()
@@ -355,14 +371,6 @@ def train():
             sampler=SequentialSampler(eval_dataset),
         )
 
-        if args.do_auxilary_task:
-            set_auxilary_changes(
-                model=model,
-                train_dataloader=train_dataloader,
-                eval_dataloader=eval_dataloader,
-                epoch=epoch,
-            )
-
         if accelerator.is_main_process:
             eval_loss = evaluate(accelerator, model, epoch, eval_dataloader)
             eval_losses.append(eval_loss)
@@ -378,21 +386,43 @@ def train():
             with open(os.path.join(args.output_path, "eval_losses.json"), "wt") as f:
                 json.dump(eval_losses, f)
 
+        objects_to_broadcast = [eval_losses, best_eval_loss]
+        broadcast_object_list(objects_to_broadcast)
         accelerator.wait_for_everyone()
+        eval_losses, best_eval_loss = objects_to_broadcast
+
+        if args.do_auxilary_task:
+            set_auxilary_changes(
+                model=accelerator.unwrap_model(model),
+                train_dataloader=train_dataloader,
+                eval_dataloader=eval_dataloader,
+                epoch=epoch,
+                best_loss=best_eval_loss,
+                eval_losses=eval_losses,
+            )
 
 
 def set_auxilary_changes(**kwargs):
     if args.stage == 1:
-        set_stage_1_changes(**kwargs)
+        _set_stage_1_changes(**kwargs)
     elif args.stage == 2:
-        set_stage_2_changes(**kwargs)
+        _set_stage_2_changes(**kwargs)
 
 
-def set_stage_1_changes(train_dataloader, epoch, **kwargs):
+patience = 2
+def _set_stage_1_changes(model, best_loss: float, eval_losses: list[float], **_):
     pass
+    # global patience
+    # if eval_losses[-1] + 0.01 > best_loss:
+    #     patience -= 1
+    # else:
+    #     patience = 2
+    # if patience == 0:
+    #     print("unfreezing scaling")
+    #     model.unfreeze_scaling()
 
 
-def set_stage_2_changes(model, epoch, **kwargs):
+def _set_stage_2_changes(model, epoch, **_):
     if epoch > args.time_till_aux:
         model.unfreeze_scaling()
 
@@ -423,7 +453,7 @@ def test():
 
     ## setup datasets
     test_dataset = MeldDataset(
-        args.test_dataset,
+        args.dev_dataset,
         mode="test",
         audio_placement="enclose",
         task="normal",
@@ -445,7 +475,7 @@ def evaluate(
     model: MmLlamaConcat,
     epoch: int,
     dataloader: DataLoader,
-):
+) -> float:
     dataloader = accelerator.prepare(dataloader)
     eval_batch_iterator = tqdm(dataloader, total=len(dataloader), desc="Evaluating")
     running_loss = 0

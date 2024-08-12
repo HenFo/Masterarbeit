@@ -45,6 +45,25 @@
                 "--checkpoint_path", "/home/fock/code/MultiModalInstructERC/experiments/multimodal/mlp/merge/interpolate/stage_1",
                 "--stage", "2"
             ]
+        },
+        {
+            "name": "Debugger: Main Merge Test",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "./run_scripts/main_merge.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true,
+            "args": [
+                "--llm_id", "/home/fock/code/MultiModalInstructERC/models/language/LLaMA2",
+                "--acoustic_id", "/home/fock/code/MultiModalInstructERC/models/acoustic/wav2vec2/wav2vec2-large-robust-12-ft-emotion-msp-dim",
+                "--adapter_id", "/home/fock/code/MultiModalInstructERC/models/language/adapter/InstructERC_unbalanced",
+                "--output_path", "/home/fock/code/MultiModalInstructERC/experiments/multimodal/mlp/merge/interpolate/stage_2",
+                "--test_dataset", "/home/fock/code/MultiModalInstructERC/datasets/meld/test_sent_emo.csv",
+                "--window_size", "5",
+                "--batch_size","1",
+                "--evaluation"
+            ]
         }
     ]
 }

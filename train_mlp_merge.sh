@@ -65,6 +65,8 @@ if [ $TEST_ONLY = False ]; then
         --lora_dim 16 \
         --lora_alpha 32 \
         --lora_dropout 0.1 \
+        --lora_module_name ".*?[qkvo]_proj" \
+        --resume_training 
         # --do_auxilary_task \
         # --time_till_aux 10 \
 

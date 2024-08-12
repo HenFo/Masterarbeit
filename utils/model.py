@@ -113,7 +113,7 @@ class MmLlamaConfig(PretrainedConfig):
 
 class MmLlama(nn.Module, ABC):
     def __init__(self, config: MmLlamaConfig, train_llm: bool = False) -> None:
-        super(MmLlamaConcat, self).__init__()
+        super(MmLlama, self).__init__()
         self.config = config
         self.train_llm = train_llm
         self.llama = AutoModelForCausalLM.from_pretrained(
@@ -156,6 +156,10 @@ class MmLlama(nn.Module, ABC):
     def unfreeze_projector(self):
         for param in self.projector.parameters():
             param.requires_grad = True
+    
+    def freeze_projector(self):
+        for param in self.projector.parameters():
+            param.requires_grad = False
 
     @torch.autocast(device_type="cuda")
     def forward(
@@ -201,15 +205,24 @@ class MmLlama(nn.Module, ABC):
             state_dict = {k: v for k, v in state_dict.items() if check_module(k)}
         return state_dict
 
-    def apply_lora(
-        self, lora_config: PeftConfig, checkpoint: str | None, trainable: bool = False
+    def apply_training_lora(
+        self, lora_config: PeftConfig, adapter_id:str | None, resume_training:bool = False
     ):
-        if checkpoint:
+        if resume_training:
             self.llama = PeftModel.from_pretrained(
-                self.llama, checkpoint, is_trainable=trainable
+                self.llama, adapter_id, is_trainable=resume_training
             )
         else:
             self.llama = get_peft_model(self.llama, lora_config)
+        return self
+    
+    def apply_inference_lora(self, adapter_id:str):
+        try:
+            self.llama = PeftModel.from_pretrained(self.llama, adapter_id)
+            self.llama = self.llama.merge_and_unload(progressbar=True)
+        except Exception:
+            print("Could not load the adapter for inference")
+        return self
 
     def save_pretrained(self, *args, **kwargs):
         return self.llama.save_pretrained(*args, **kwargs)
@@ -393,6 +406,7 @@ class MmLlamaMerge(MmLlamaConcat):
         super(MmLlamaMerge, self).__init__(config, train_llm)
         self.alpha = nn.Parameter(torch.tensor(alpha))
 
+
     def freeze_scaling(self):
         self.alpha.requires_grad = False
 
@@ -487,10 +501,10 @@ class MmLlamaMerge(MmLlamaConcat):
         final_embedding = remove_audio_tokens(output_embeds)
         final_attention_mask = remove_audio_tokens(
             input_attention_mask.unsqueeze(-1)
-        ).squeeze()
+        ).squeeze(-1)
         final_labels = None
         if labels is not None:
-            final_labels = remove_audio_tokens(labels.unsqueeze(-1)).squeeze()
+            final_labels = remove_audio_tokens(labels.unsqueeze(-1)).squeeze(-1)
 
         return {
             "inputs_embeds": final_embedding,
