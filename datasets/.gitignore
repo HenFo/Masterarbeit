@@ -1,5 +1,6 @@
 **/*.tar.gz
 iemocap/*
 !iemocap/iemocap_to_csv.py
+!iemocap/iemocap_split.csv
 meld/*
 !**/.gitkeep
