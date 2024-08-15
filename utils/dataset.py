@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 import torch
 import torchaudio
 from torch.utils.data import Dataset
@@ -118,9 +119,9 @@ class MeldAudioDataset(Dataset):
         # ds["prompt"] = ds["Speaker"] + ": \"" + ds["Utterance"] + "\""
         ds = MeldAudioDataset.create_window_view(ds, window)
         return ds
-    
+
     @classmethod
-    def meld2instruct(cls, label:str) -> str:
+    def meld2instruct(cls, label: str) -> str:
         if label == "anger":
             return "angry"
         if label == "joy":
@@ -128,7 +129,6 @@ class MeldAudioDataset(Dataset):
         if label == "sadness":
             return "sad"
         return label
-
 
     @classmethod
     def create_window_view(
@@ -145,15 +145,13 @@ class MeldAudioDataset(Dataset):
         return dialogue_windows
 
 
-
-
-class MeldDataset(Dataset):
+class ERCDataset(Dataset, ABC):
     def __init__(
         self,
         dataset_path: str,
         mode,
         task: str = "normal",
-        audio_placement:str = "target",
+        audio_placement: str = "target",
         mix_rate: float = 0.1,
         target_sample_rate: int = 16000,
         window: int = 5,
@@ -173,8 +171,6 @@ class MeldDataset(Dataset):
         self.include_audio_percentage = include_audio_percentage
         self.include_target_text_percentage = include_target_text_percentage
         self.dataset: pd.DataFrame = self._prepare_dataset(dataset_path)
-        self.emotions = "surprise, anger, neutral, joy, sadness, fear, disgust"
-        self.speaker = "Speaker_0, Speaker_1, Speaker_2, Speaker_3, Speaker_4, Speaker_5, Speaker_6, Speaker_7"
         self.ds_sample_rate = self._guess_samplerate()
         self.resampler = AT.Resample(
             orig_freq=self.ds_sample_rate, new_freq=self.target_sample_rate
@@ -198,10 +194,10 @@ class MeldDataset(Dataset):
                 audio, text = self._get_normal_input(history)
             else:
                 text = self._generate_emotion_prediction(history)
-           
+
         if self.task == "speaker":
             text = self._generate_speaker_ident_task(history)
-        
+
         return (audio, text["input"]), text["target"]
 
     def _get_normal_input(self, history):
@@ -213,7 +209,10 @@ class MeldDataset(Dataset):
         else:
             audio = self._get_audio(history.iloc[-1])
             include_audio = np.random.random() < self.include_audio_percentage
-            include_text = np.random.random() < self.include_target_text_percentage or not include_audio
+            include_text = (
+                np.random.random() < self.include_target_text_percentage
+                or not include_audio
+            )
             text = self._generate_input(history, include_audio, include_text)
         return audio, text
 
@@ -233,13 +232,9 @@ class MeldDataset(Dataset):
 
         return wav.numpy()
 
+    @abstractmethod
     def _build_path(self, row: pd.Series) -> str:
-        filename = f"dia{row['Dialogue_ID']}_utt{row['Utterance_ID']}.wav"
-        path = os.path.join(
-            os.path.dirname(self.dataset_path), "audio", self.mode, filename
-        )
-        return path
-
+        raise NotImplementedError()
 
     @lru_cache(maxsize=None)
     def _check_audio_corruption(self, row_name: int) -> bool:
@@ -260,16 +255,9 @@ class MeldDataset(Dataset):
         _, sr = torchaudio.load(path)
         return sr
 
-    def _prepare_dataset(self, path) -> pd.DataFrame:
-        ds = pd.read_csv(path, index_col=0).reset_index(drop=True)
-        ds["Utterance"] = ds["Utterance"].str.replace("’", "")
-        ds["Utterance"] = ds["Utterance"].str.replace("‘", "'")
-        ds = (
-            ds.groupby("Dialogue_ID")
-            .apply(self._transform_speaker_to_id)
-            .reset_index(drop=True)
-        )
-        return ds
+    @abstractmethod
+    def _prepare_dataset(self, path: str) -> pd.DataFrame:
+        raise NotImplementedError()
 
     def _transform_speaker_to_id(self, df: pd.DataFrame) -> pd.DataFrame:
         name_to_id = {name: i for i, name in enumerate(df["Speaker"].unique())}
@@ -315,16 +303,133 @@ class MeldDataset(Dataset):
                 instruction += f"\"<audio> {target['Utterance']} </audio>\""
             else:
                 instruction += f"\"{target['Utterance']}\""
-            
+
         instruction += f"> from <{self.emotions}>:"
 
         prompt = f"Now you are expert of sentiment and emotional analysis. The following conversation noted between '### ###' involves several speaker. ### {dialog_chain} ### {instruction}"
         return {"input": prompt, "target": target["Emotion"]}
 
 
+class MeldDataset(ERCDataset):
+    def __init__(
+        self,
+        dataset_path: str,
+        mode,
+        task: str = "normal",
+        audio_placement: str = "target",
+        mix_rate: float = 0.1,
+        target_sample_rate: int = 16000,
+        window: int = 5,
+        include_audio_percentage: float = 1.0,
+        include_target_text_percentage: float = 1.0,
+    ):
+        super().__init__(
+            dataset_path,
+            mode,
+            task,
+            audio_placement,
+            mix_rate,
+            target_sample_rate,
+            window,
+            include_audio_percentage,
+            include_target_text_percentage,
+        )
+        self.emotions = "surprise, anger, neutral, joy, sadness, fear, disgust"
+        self.speaker = "Speaker_0, Speaker_1, Speaker_2, Speaker_3, Speaker_4, Speaker_5, Speaker_6, Speaker_7"
+
+    def _prepare_dataset(self, path) -> pd.DataFrame:
+        ds = pd.read_csv(path, index_col=0).reset_index(drop=True)
+        ds["Utterance"] = ds["Utterance"].str.replace("’", "")
+        ds["Utterance"] = ds["Utterance"].str.replace("‘", "'")
+        ds = (
+            ds.groupby("Dialogue_ID")
+            .apply(self._transform_speaker_to_id)
+            .reset_index(drop=True)
+        )
+        return ds
+
+    def _build_path(self, row: pd.Series) -> str:
+        filename = f"dia{row['Dialogue_ID']}_utt{row['Utterance_ID']}.wav"
+        path = os.path.join(
+            os.path.dirname(self.dataset_path), "audio", self.mode, filename
+        )
+        return path
+
+
+class IemocapDataset(ERCDataset):
+    def __init__(
+        self,
+        dataset_path: str,
+        mode,
+        task: str = "normal",
+        audio_placement: str = "target",
+        mix_rate: float = 0.1,
+        target_sample_rate: int = 16000,
+        window: int = 5,
+        include_audio_percentage: float = 1.0,
+        include_target_text_percentage: float = 1.0,
+    ):
+        self.emotions = "neutral, angry, frustrated, happy, excited, sad"
+        self.speaker = "Speaker_0, Speaker_1"
+        super().__init__(
+            dataset_path,
+            mode,
+            task,
+            audio_placement,
+            mix_rate,
+            target_sample_rate,
+            window,
+            include_audio_percentage,
+            include_target_text_percentage,
+        )
+
+        self.filtered_dataset = self.dataset[
+            self.dataset["Emotion"].isin(self.emotions.split(", "))
+        ]
+        indices = self.dataset.index[
+            self.dataset.isin(self.filtered_dataset).all(axis=1)
+        ]
+        self.index_mapping = {i: j for i, j in enumerate(indices)}
+
+    def __getitem__(self, index):
+        index = self.index_mapping[index]
+        return super().__getitem__(index)
+
+    def __len__(self):
+        return len(self.filtered_dataset)
+
+    def _prepare_dataset(self, path: str) -> pd.DataFrame:
+        label_mapping = {
+            "neu": "neutral",
+            "ang": "angry",
+            "fru": "frustrated",
+            "hap": "happy",
+            "exc": "excited",
+            "sad": "sad",
+        }
+        ds = pd.read_csv(path)
+        split = pd.read_csv(os.path.join(os.path.dirname(path), "iemocap_split.csv"))
+        ds = pd.merge(ds, split, on="Dialogue_ID")
+        ds["Emotion"] = ds["Emotion"].map(label_mapping)
+        ds = ds[ds["Split"] == self.mode]
+        ds = (
+            ds.groupby("Dialogue_ID")
+            .apply(self._transform_speaker_to_id)
+            .reset_index(drop=True)
+        )
+        return ds
+
+    def _build_path(self, row: pd.Series) -> str:
+        return row["wav_path"]
+
+
 if __name__ == "__main__":
-    PATH = "/home/fock/code/MultiModalInstructERC/datasets/meld/test_sent_emo.csv"
-    tasks = ["normal", "speaker", "emotion", "mixed"]
-    ds = MeldDataset(PATH, mode="test", window=3, task="normal", audio_placement="enclose")
-    print(ds[0])
-    
+    PATH = "/home/fock/code/MultiModalInstructERC/datasets/iemocap/iemocap.csv"
+    # tasks = ["normal", "speaker", "emotion", "mixed"]
+    ds = IemocapDataset(
+        PATH, mode="test", window=3, task="normal", audio_placement="enclose"
+    )
+
+    for i in range(len(ds)):
+        x = ds[i]
+    print(x)

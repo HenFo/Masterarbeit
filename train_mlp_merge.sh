@@ -2,18 +2,36 @@
 
 TEST_ONLY=False
 
-WINDOW=5
+WINDOW=12
 
-experiment="mlp/merge/interpolate"
 
-LANGUAGE_MODEL="/home/fock/code/MultiModalInstructERC/models/language/LLaMA2"
-LORA_ADAPTER="/home/fock/code/MultiModalInstructERC/models/language/adapter/InstructERC_unbalanced"
+# dataset="meld"
+dataset="iemocap"
+model="LLaMA2-base"
+
+experiment="mlp/merge/interpolate/$dataset/$model"
+
+LANGUAGE_MODEL="/home/fock/code/MultiModalInstructERC/models/language/$model"
+LORA_ADAPTER="/home/fock/code/MultiModalInstructERC/models/language/adapter/$dataset/$model"
 ACOUSTIC_MODEL="/home/fock/code/MultiModalInstructERC/models/acoustic/wav2vec2/wav2vec2-large-robust-12-ft-emotion-msp-dim"
-OUTPUT_PATH="/home/fock/code/MultiModalInstructERC/experiments/multimodal/"$experiment"/"
+OUTPUT_PATH="/home/fock/code/MultiModalInstructERC/experiments/multimodal/$experiment/"
 
-DS_TRAIN_PATH="/home/fock/code/MultiModalInstructERC/datasets/meld/train_sent_emo.csv"
-DS_DEV_PATH="/home/fock/code/MultiModalInstructERC/datasets/meld/dev_sent_emo.csv"
-DS_TEST_PATH="/home/fock/code/MultiModalInstructERC/datasets/meld/test_sent_emo.csv"
+DS_BASE="/home/fock/code/MultiModalInstructERC/datasets/$dataset"
+if [ $dataset = "meld" ]; then
+    DS_TRAIN_PATH="$DS_BASE/train_sent_emo.csv"
+    DS_DEV_PATH="$DS_BASE/dev_sent_emo.csv"
+    DS_TEST_PATH="$DS_BASE/test_sent_emo.csv"
+
+elif [ $dataset = "iemocap" ]; then
+    DS_TRAIN_PATH="$DS_BASE/iemocap.csv"
+    DS_DEV_PATH="$DS_BASE/iemocap.csv"
+    DS_TEST_PATH="$DS_BASE/iemocap.csv"
+
+else
+    echo "Invalid dataset"
+    exit 1
+fi
+
 
 stage_1_path=$OUTPUT_PATH"stage_1/"
 output_path=$OUTPUT_PATH"stage_2/"
@@ -21,8 +39,8 @@ output_path=$OUTPUT_PATH"stage_2/"
 if [ $TEST_ONLY = False ]; then
     echo "Running stage 1"
     accelerate launch ./run_scripts/main_merge.py \
-        --batch_size 4 \
-        --gradient_accumulation_steps 8 \
+        --batch_size 2 \
+        --gradient_accumulation_steps 16 \
         --llm_id $LANGUAGE_MODEL \
         --acoustic_id $ACOUSTIC_MODEL \
         --adapter_id $LORA_ADAPTER \
@@ -32,10 +50,12 @@ if [ $TEST_ONLY = False ]; then
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
         --deepspeed_config "deepspeed_config.json" \
-        --epochs 30 \
-        --lr 2e-4 \
+        --epochs 25 \
+        --lr 5e-4 \
         --stage 1 \
-        --window_size $WINDOW
+        --resume_training \
+        --window_size $WINDOW 
+
 
 
     if [ $? -ne 0 ]; then
@@ -45,8 +65,8 @@ if [ $TEST_ONLY = False ]; then
 
     echo "Running stage 2"
     accelerate launch ./run_scripts/main_merge.py \
-        --batch_size 4 \
-        --gradient_accumulation_steps 8 \
+        --batch_size 2 \
+        --gradient_accumulation_steps 16 \
         --llm_id $LANGUAGE_MODEL \
         --acoustic_id $ACOUSTIC_MODEL \
         --adapter_id $LORA_ADAPTER \
@@ -57,11 +77,11 @@ if [ $TEST_ONLY = False ]; then
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
         --deepspeed_config "deepspeed_config.json" \
-        --epochs 20 \
+        --epochs 10 \
         --lr 2e-4 \
-        --train_llm \
         --stage 2 \
         --window_size $WINDOW \
+        --train_llm \
         --lora_dim 16 \
         --lora_alpha 32 \
         --lora_dropout 0.1 \
@@ -79,13 +99,14 @@ if [ $TEST_ONLY = False ]; then
 fi
 
 echo "Running evaluation"
-python ./run_scripts/main_merge.py \
-    --evaluation True \
+python run_scripts/main_merge.py \
+    --evaluation \
     --llm_id $LANGUAGE_MODEL \
     --acoustic_id $ACOUSTIC_MODEL \
     --adapter_id $LORA_ADAPTER \
     --output_path $stage_1_path \
     --test_dataset $DS_TEST_PATH \
+    --dev_dataset $DS_DEV_PATH \
     --window_size $WINDOW \
     --batch_size 1
 

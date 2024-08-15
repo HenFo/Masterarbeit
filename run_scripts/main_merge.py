@@ -20,6 +20,8 @@ from transformers import (
 )
 from accelerate.utils import broadcast_object_list
 
+from utils.dataset import ERCDataset, IemocapDataset
+
 sys.path.append("/home/fock/code/MultiModalInstructERC")
 import argparse
 
@@ -275,6 +277,13 @@ def setup_config_and_processor():
 
     return tokenizer, processor, config
 
+def dataset_class(dataset_path:str) -> ERCDataset:
+        if "meld" in dataset_path:
+            return MeldDataset
+        if "iemocap" in dataset_path:
+            return IemocapDataset
+        else:
+            raise ValueError("Invalid dataset path")
 
 def train():
     accelerator = Accelerator(
@@ -285,16 +294,16 @@ def train():
     tokenizer, processor, config = setup_config_and_processor()
 
     ## setup datasets
-    train_dataset = MeldDataset(
+    train_dataset = dataset_class(args.train_dataset)(
         args.train_dataset,
         mode="train",
         task=args.task,
         window=args.window_size,
         audio_placement="enclose",
     )
-    eval_dataset = MeldDataset(
+    eval_dataset = dataset_class(args.dev_dataset)(
         args.dev_dataset,
-        mode="dev",
+        mode="test", # for iemocap
         task="normal",
         window=args.window_size,
         audio_placement="enclose",
@@ -452,8 +461,8 @@ def test():
     model = load_model_for_test(model)
 
     ## setup datasets
-    test_dataset = MeldDataset(
-        args.dev_dataset,
+    test_dataset = dataset_class(args.test_dataset)(
+        args.test_dataset,
         mode="test",
         audio_placement="enclose",
         task="normal",
