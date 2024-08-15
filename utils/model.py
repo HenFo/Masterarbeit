@@ -206,9 +206,11 @@ class MmLlama(nn.Module, ABC):
         return state_dict
 
     def apply_training_lora(
-        self, lora_config: PeftConfig, adapter_id:str | None, resume_training:bool = False
+        self, lora_config: PeftConfig | None, adapter_id:str | None = None, resume_training:bool = False
     ):
-        if resume_training:
+        assert lora_config is not None or (adapter_id is not None and resume_training is True)
+        
+        if resume_training and adapter_id is not None:
             self.llama = PeftModel.from_pretrained(
                 self.llama, adapter_id, is_trainable=resume_training
             )

@@ -16,17 +16,16 @@ from transformers import (
     AutoTokenizer,
     LlamaTokenizerFast,
     get_linear_schedule_with_warmup,
-    get_constant_schedule_with_warmup,
 )
 from accelerate.utils import broadcast_object_list
 
+sys.path.append("/home/fock/code/MultiModalInstructERC")
 from utils.dataset import ERCDataset, IemocapDataset
 
-sys.path.append("/home/fock/code/MultiModalInstructERC")
 import argparse
 
 import torch.nn as nn
-from peft import LoraConfig, PeftModel, get_peft_model
+from peft import LoraConfig
 
 from utils import (
     MeldDataset,
@@ -200,10 +199,10 @@ def load_model_for_stage(model: nn.Module, stage: int):
 
 def _load_model_for_stage_1(model: nn.Module):
     """Load model for stage 1 training (Projector training)"""
-    if args.resume_training:
-        model.load_state_dict(
-            torch.load(os.path.join(args.output_path, "best_model.pth")), strict=False
-        )
+    # if args.resume_training:
+    #     model.load_state_dict(
+    #         torch.load(os.path.join(args.output_path, "best_model.pth")), strict=False
+    #     )
     model.freeze_encoder()
     model.freeze_scaling()
     return model
@@ -213,18 +212,14 @@ def _load_model_for_stage_2(model: MmLlama):
     model.load_state_dict(
         torch.load(os.path.join(args.checkpoint_path, "best_model.pth")), strict=False
     )
-    # lora_config = LoraConfig(
-    #     # task_type="CAUSAL_LM",
-    #     r=args.lora_dim,
-    #     lora_alpha=args.lora_alpha,
-    #     lora_dropout=args.lora_dropout,
-    #     target_modules=args.lora_module_name,
-    #     bias="none",
-    # )
-    # model = model.apply_training_lora(lora_config)
-    # model.unfreeze_projector()
-    model.freeze_encoder()
-    model.freeze_projector()
+    lora_config = LoraConfig(
+        r=args.lora_dim,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
+        target_modules=args.lora_module_name,
+        bias="none",
+    )
+    model = model.apply_training_lora(lora_config)
 
     return model
 
@@ -277,13 +272,15 @@ def setup_config_and_processor():
 
     return tokenizer, processor, config
 
-def dataset_class(dataset_path:str) -> ERCDataset:
-        if "meld" in dataset_path:
-            return MeldDataset
-        if "iemocap" in dataset_path:
-            return IemocapDataset
-        else:
-            raise ValueError("Invalid dataset path")
+
+def dataset_class(dataset_path: str) -> ERCDataset:
+    if "meld" in dataset_path:
+        return MeldDataset
+    if "iemocap" in dataset_path:
+        return IemocapDataset
+    else:
+        raise ValueError("Invalid dataset path")
+
 
 def train():
     accelerator = Accelerator(
@@ -303,7 +300,7 @@ def train():
     )
     eval_dataset = dataset_class(args.dev_dataset)(
         args.dev_dataset,
-        mode="test", # for iemocap
+        mode="test",  # for iemocap
         task="normal",
         window=args.window_size,
         audio_placement="enclose",
@@ -327,17 +324,34 @@ def train():
         optimizer, len(train_dataset), args.batch_size, args.epochs
     )
 
+
     # setup accelerator
     (model, optimizer, lr_scheduler, train_dataloader) = accelerator.prepare(
         model, optimizer, lr_scheduler, train_dataloader
     )
+
+    accelerator.register_for_checkpointing(lr_scheduler)
 
     # training loop
     best_eval_loss = float("inf")
     train_losses = []
     eval_losses = []
 
-    for epoch in range(args.epochs):
+    start_epoch = 0
+
+
+    checkpoint_path = os.path.join(args.output_path, "checkpoint")
+    if os.path.exists(os.path.join(checkpoint_path, "checkpoint_metadata.bin")) and args.resume_training:
+        print("############## Loading checkpoint ##############")
+        (
+            model,
+            start_epoch,
+            best_eval_loss,
+            train_losses,
+            eval_losses,
+        ) = load_checkpoint(accelerator, model, checkpoint_path)
+
+    for epoch in range(max(0,start_epoch-1), args.epochs):
         epoch += 1
         model.train()
         batch_iterator = tqdm(
@@ -370,13 +384,14 @@ def train():
         lr_scheduler.step()
         running_loss /= len(train_dataloader)
         train_losses.append(running_loss)
+
         # evaluation
         eval_dataloader = DataLoader(
             eval_dataset,
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=4,
-            collate_fn=SequenceClassificationCollator(processor, mode="train"),
+            collate_fn=SequenceClassificationCollator(processor, mode="train"), # mode=train because we test performance using loss,  not f1
             sampler=SequentialSampler(eval_dataset),
         )
 
@@ -395,10 +410,27 @@ def train():
             with open(os.path.join(args.output_path, "eval_losses.json"), "wt") as f:
                 json.dump(eval_losses, f)
 
+
         objects_to_broadcast = [eval_losses, best_eval_loss]
         broadcast_object_list(objects_to_broadcast)
         accelerator.wait_for_everyone()
         eval_losses, best_eval_loss = objects_to_broadcast
+        
+        if running_loss == math.nan:
+            print("nan loss, stopping training")
+            break
+
+        print("###### Saving checkpoint ######")
+        save_checkpoint(
+            accelerator,
+            model,
+            epoch,
+            best_eval_loss,
+            train_losses,
+            eval_losses,
+            checkpoint_path=checkpoint_path
+        )
+        accelerator.wait_for_everyone()
 
         if args.do_auxilary_task:
             set_auxilary_changes(
@@ -419,6 +451,8 @@ def set_auxilary_changes(**kwargs):
 
 
 patience = 2
+
+
 def _set_stage_1_changes(model, best_loss: float, eval_losses: list[float], **_):
     pass
     # global patience
@@ -436,15 +470,63 @@ def _set_stage_2_changes(model, epoch, **_):
         model.unfreeze_scaling()
 
 
-def save_model(accelerator, tokenizer, model):
+def save_model(accelerator: Accelerator, tokenizer, model):
     unwrapped_model = accelerator.unwrap_model(model)
-    torch.save(
+    accelerator.save(
         unwrapped_model.state_dict(modules=["projector", "alpha"]),
         os.path.join(args.output_path, "best_model.pth"),
     )
+
     if args.train_llm:
         model.save_pretrained(args.output_path)
     tokenizer.save_pretrained(args.output_path)
+
+
+def save_checkpoint(
+    accelerator: Accelerator,
+    model,
+    epoch,
+    best_eval_loss,
+    train_losses,
+    eval_losses,
+    checkpoint_path="checkpoint",
+):
+    create_folder_if_not_exists(checkpoint_path)
+    accelerator.save_state(checkpoint_path, exclude_frozen_parameters=True)
+    if accelerator.is_main_process:
+        accelerator.save(
+            {
+                "epoch": epoch,
+                "best_eval_loss": best_eval_loss,
+                "train_losses": train_losses,
+                "eval_losses": eval_losses,
+            },
+            os.path.join(checkpoint_path, "checkpoint_metadata.bin"),
+        )
+        if args.train_llm:
+            model.save_pretrained(checkpoint_path)
+
+
+def load_checkpoint(accelerator: Accelerator, model: MmLlama, checkpoint_path:str):
+    accelerator.load_state(checkpoint_path, load_module_strict=False)
+    checkpoint = torch.load(os.path.join(checkpoint_path, "checkpoint_metadata.bin"))
+    if args.train_llm:
+        model = accelerator.unwrap_model(model)
+        model.apply_training_lora(adapter_id=checkpoint_path, resume_training=True)
+        model = accelerator.prepare_model(model)
+
+    epoch = checkpoint["epoch"]
+    best_eval_loss = checkpoint["best_eval_loss"]
+    train_losses = checkpoint["train_losses"]
+    eval_losses = checkpoint["eval_losses"]
+
+    return (
+        model,
+        epoch,
+        best_eval_loss,
+        train_losses,
+        eval_losses,
+    )
 
 
 def prepare_batch(batch: dict[str, dict[str, torch.Tensor]]):

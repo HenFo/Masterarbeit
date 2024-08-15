@@ -50,8 +50,8 @@ if [ $TEST_ONLY = False ]; then
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
         --deepspeed_config "deepspeed_config.json" \
-        --epochs 25 \
-        --lr 5e-4 \
+        --epochs 20 \
+        --lr 2e-4 \
         --stage 1 \
         --resume_training \
         --window_size $WINDOW 
