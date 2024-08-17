@@ -8,6 +8,7 @@ import torch
 from accelerate import Accelerator
 from sklearn.metrics import f1_score
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, SequentialSampler
 from tqdm.auto import tqdm
 from transformers import (
@@ -67,6 +68,7 @@ class Args:
     lr: float = 2e-5
     epochs: int = 15
     warmup_ratio: float = 0.1
+    min_lr_ratio: float = 0.0
     weight_decay: float = 0
     train_llm: bool = False
     lora_dim: int = 16
@@ -102,14 +104,13 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--warmup_ratio", type=float, default=0.1)
+    parser.add_argument("--min_lr_ratio", type=float, default=0.0)
     parser.add_argument("--weight_decay", type=float, default=0)
     parser.add_argument("--train_llm", action="store_true")
     parser.add_argument("--lora_dim", type=int, default=16)
     parser.add_argument("--lora_alpha", type=int, default=32)
     parser.add_argument("--lora_dropout", type=float, default=0.1)
-    parser.add_argument(
-        "--lora_module_name", type=str, default=".*?[qkvo]_proj"
-    )
+    parser.add_argument("--lora_module_name", type=str, default=".*?[qkvo]_proj")
     parser.add_argument("--resume_training", action="store_true")
     parser.add_argument("--time_till_aux", type=int, default=15)
     parser.add_argument("--do_auxilary_task", action="store_true")
@@ -167,16 +168,27 @@ def get_grouped_parameters(model):
     return grouped_parameters
 
 
-def get_scheduler(optimizer, len_dataset, batch_size, epochs):
-    num_steps = math.ceil(len_dataset / batch_size)
-    num_steps *= epochs + 2
+def get_scheduler(
+    optimizer,
+    len_dataset,
+    batch_size,
+    gradient_accumulation_steps,
+    epochs,
+    min_lr_frac=0.5,
+):
+    num_steps = math.ceil(len_dataset / (batch_size * gradient_accumulation_steps))
+    num_steps *= epochs
     warmup_steps = math.ceil(num_steps * args.warmup_ratio)
-    scheduler = get_linear_schedule_with_warmup(
-        optimizer, num_warmup_steps=warmup_steps, num_training_steps=num_steps
-    )
-    # scheduler = get_constant_schedule_with_warmup(
-    #     optimizer, num_warmup_steps=warmup_steps
-    # )
+    def cosine_decay_with_warmup(step):
+        if step < warmup_steps:
+            return float(step) / max(1.0, warmup_steps)
+
+        progress = float(step - warmup_steps) / max(1, num_steps - warmup_steps)
+        cos_progress = 0.5 * (1 + math.cos(math.pi * progress))
+        return cos_progress + (1 - cos_progress) * min_lr_frac
+
+    scheduler = LambdaLR(optimizer, lr_lambda=cosine_decay_with_warmup)
+
     return scheduler
 
 
@@ -320,10 +332,14 @@ def train():
     # setup optimizer
     grouped_parameters = get_grouped_parameters(model)
     optimizer = AdamW(grouped_parameters, lr=args.lr, betas=(0.9, 0.95))
-    lr_scheduler = get_scheduler(
-        optimizer, len(train_dataset), args.batch_size, args.epochs
+    lr_scheduler: LambdaLR = get_scheduler(
+        optimizer,
+        len(train_dataset),
+        args.batch_size,
+        args.gradient_accumulation_steps,
+        args.epochs,
+        args.min_lr_ratio,
     )
-
 
     # setup accelerator
     (model, optimizer, lr_scheduler, train_dataloader) = accelerator.prepare(
@@ -367,13 +383,13 @@ def train():
                     loss = outputs["loss"]
                     running_loss += loss.item()
 
-                    accelerator.backward(loss)
-                    # torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                    optimizer.step()
                     optimizer.zero_grad()
+                    accelerator.backward(loss)
+                    optimizer.step()
+                    lr_scheduler.step()
 
                 batch_iterator.set_description(
-                    f"Epoch: {epoch} / {args.epochs}, Loss: {loss.item():.4f}"
+                    f"Epoch: {epoch} / {args.epochs}, Current Loss: {loss.item():.4f}"
                 )
             except torch.cuda.OutOfMemoryError:
                 print("OutOfMemoty error on step", step, "skipping step")
@@ -381,7 +397,6 @@ def train():
                 print("Audio size", batch["acoustic"]["input_values"].size())
                 torch.cuda.empty_cache()
 
-        lr_scheduler.step()
         running_loss /= len(train_dataloader)
         train_losses.append(running_loss)
 

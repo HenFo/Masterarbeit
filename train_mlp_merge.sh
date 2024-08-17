@@ -52,10 +52,10 @@ if [ $TEST_ONLY = False ]; then
         --deepspeed_config "deepspeed_config.json" \
         --epochs 20 \
         --lr 2e-4 \
+        --min_lr_ratio 0.5 \
         --stage 1 \
         --resume_training \
         --window_size $WINDOW 
-
 
 
     if [ $? -ne 0 ]; then
@@ -79,6 +79,7 @@ if [ $TEST_ONLY = False ]; then
         --deepspeed_config "deepspeed_config.json" \
         --epochs 10 \
         --lr 2e-4 \
+        --min_lr_ratio 0.2 \
         --stage 2 \
         --window_size $WINDOW \
         --train_llm \
