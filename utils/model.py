@@ -131,9 +131,12 @@ class MmLlama(nn.Module, ABC):
         ).half()
 
         self.projector = ModalityProjector(1024, 4096)
+        self.freeze_audio_encoder()
 
-    def freeze_llm(self):
-        for param in self.llama.parameters():
+    def freeze_llm(self, train_norm: bool = True):
+        for name, param in self.llama.named_parameters():
+            if train_norm and "norm.weight" in name:
+                continue
             param.requires_grad = False
 
     def unfreeze_llm(self):
@@ -148,9 +151,9 @@ class MmLlama(nn.Module, ABC):
         for param in self.wave2vec2.parameters():
             param.requires_grad = True
 
-    def freeze_encoder(self):
+    def freeze_encoder(self, train_norm: bool = True):
         if not self.train_llm:
-            self.freeze_llm()
+            self.freeze_llm(train_norm)
         self.freeze_audio_encoder()
 
     def unfreeze_projector(self):

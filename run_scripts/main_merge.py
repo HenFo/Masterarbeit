@@ -146,7 +146,7 @@ print(args)
 
 
 def get_grouped_parameters(model):
-    no_decay = ["bias", "LayerNorm.weight"]
+    no_decay = ["bias", "norm.weight"]
     grouped_parameters = [
         {
             "params": [
@@ -209,13 +209,9 @@ def load_model_for_stage(model: nn.Module, stage: int):
         raise ValueError("Invalid stage number")
 
 
-def _load_model_for_stage_1(model: nn.Module):
+def _load_model_for_stage_1(model: MmLlamaMerge):
     """Load model for stage 1 training (Projector training)"""
-    # if args.resume_training:
-    #     model.load_state_dict(
-    #         torch.load(os.path.join(args.output_path, "best_model.pth")), strict=False
-    #     )
-    model.freeze_encoder()
+    model.freeze_encoder(train_norm=True)
     model.freeze_scaling()
     return model
 
