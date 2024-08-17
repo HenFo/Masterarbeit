@@ -216,7 +216,7 @@ def _load_model_for_stage_1(model: MmLlamaMerge):
     return model
 
 
-def _load_model_for_stage_2(model: MmLlama):
+def _load_model_for_stage_2(model: MmLlamaMerge):
     model.load_state_dict(
         torch.load(os.path.join(args.checkpoint_path, "best_model.pth")), strict=False
     )
@@ -235,15 +235,6 @@ def _load_model_for_stage_2(model: MmLlama):
     return model
 
 
-# def load_model_for_test(model: nn.Module):
-#     model.load_state_dict(
-#         torch.load(os.path.join(args.output_path, "best_model.pth")), strict=False
-#     )
-#     model = PeftModel.from_pretrained(model, args.output_path, is_trainable=False)
-#     model = model.merge_and_unload(progressbar=True)
-#     return model.cuda()
-
-
 def load_model_for_test(model: MmLlama):
     model.load_state_dict(
         torch.load(os.path.join(args.output_path, "best_model.pth")), strict=False
@@ -254,7 +245,7 @@ def load_model_for_test(model: MmLlama):
 
 def create_folder_if_not_exists(path):
     if not os.path.exists(path):
-        os.makedirs(path)
+        os.makedirs(path, exist_ok=True)
 
 
 def setup_config_and_processor():
@@ -354,9 +345,11 @@ def train():
 
     start_epoch = 0
 
-
     checkpoint_path = os.path.join(args.output_path, "checkpoint")
-    if os.path.exists(os.path.join(checkpoint_path, "checkpoint_metadata.bin")) and args.resume_training:
+    if (
+        os.path.exists(os.path.join(checkpoint_path, "checkpoint_metadata.bin"))
+        and args.resume_training
+    ):
         print("############## Loading checkpoint ##############")
         (
             model,
@@ -366,7 +359,8 @@ def train():
             eval_losses,
         ) = load_checkpoint(accelerator, model, checkpoint_path)
 
-    for epoch in range(max(0,start_epoch-1), args.epochs):
+
+    for epoch in range(max(0, start_epoch - 1), args.epochs):
         epoch += 1
         model.train()
         batch_iterator = tqdm(
@@ -405,7 +399,9 @@ def train():
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=4,
-            collate_fn=SequenceClassificationCollator(processor, mode="train"), # mode=train because we test performance using loss,  not f1
+            collate_fn=SequenceClassificationCollator(
+                processor, mode="train"
+            ),  # mode=train because we test performance using loss,  not f1
             sampler=SequentialSampler(eval_dataset),
         )
 
@@ -424,12 +420,11 @@ def train():
             with open(os.path.join(args.output_path, "eval_losses.json"), "wt") as f:
                 json.dump(eval_losses, f)
 
-
         objects_to_broadcast = [eval_losses, best_eval_loss]
         broadcast_object_list(objects_to_broadcast)
         accelerator.wait_for_everyone()
         eval_losses, best_eval_loss = objects_to_broadcast
-        
+
         if running_loss == math.nan:
             print("nan loss, stopping training")
             break
@@ -442,7 +437,7 @@ def train():
             best_eval_loss,
             train_losses,
             eval_losses,
-            checkpoint_path=checkpoint_path
+            checkpoint_path=checkpoint_path,
         )
         accelerator.wait_for_everyone()
 
@@ -515,7 +510,7 @@ def save_checkpoint(
             model.save_pretrained(checkpoint_path)
 
 
-def load_checkpoint(accelerator: Accelerator, model: MmLlama, checkpoint_path:str):
+def load_checkpoint(accelerator: Accelerator, model: MmLlama, checkpoint_path: str):
     accelerator.load_state(checkpoint_path, load_module_strict=False)
     checkpoint = torch.load(os.path.join(checkpoint_path, "checkpoint_metadata.bin"))
     if args.train_llm:
