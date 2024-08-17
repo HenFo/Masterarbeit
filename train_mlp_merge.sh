@@ -9,7 +9,7 @@ WINDOW=12
 dataset="iemocap"
 model="LLaMA2-base"
 
-experiment="mlp/merge/interpolate/$dataset/$model"
+experiment="mlp/merge/interpolate/$dataset/$model/audio_upscale_10"
 
 LANGUAGE_MODEL="/home/fock/code/MultiModalInstructERC/models/language/$model"
 LORA_ADAPTER="/home/fock/code/MultiModalInstructERC/models/language/adapter/$dataset/$model"
@@ -77,7 +77,7 @@ if [ $TEST_ONLY = False ]; then
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
         --deepspeed_config "deepspeed_config.json" \
-        --epochs 10 \
+        --epochs 20 \
         --lr 2e-4 \
         --min_lr_ratio 0.2 \
         --stage 2 \
@@ -87,8 +87,8 @@ if [ $TEST_ONLY = False ]; then
         --lora_alpha 32 \
         --lora_dropout 0.1 \
         --lora_module_name ".*?[qkvo]_proj" \
+        --do_auxilary_task \
         --resume_training 
-        # --do_auxilary_task \
         # --time_till_aux 10 \
 
     if [ $? -ne 0 ]; then

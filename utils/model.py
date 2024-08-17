@@ -406,10 +406,11 @@ class MmLlamaConcat(MmLlama):
 
 class MmLlamaMerge(MmLlamaConcat):
     def __init__(
-        self, config: MmLlamaConfig, train_llm: bool = False, alpha: float = 1.0
+        self, config: MmLlamaConfig, train_llm: bool = False, alpha: float = 1.0, aux_scalar: float = 1.0
     ) -> None:
         super(MmLlamaMerge, self).__init__(config, train_llm)
         self.alpha = nn.Parameter(torch.tensor(alpha))
+        self.aux_scalar = aux_scalar
 
 
     def freeze_scaling(self):
@@ -488,8 +489,8 @@ class MmLlamaMerge(MmLlamaConcat):
         input_attention_mask: torch.Tensor,
         labels: Union[torch.Tensor, None],
     ) -> Dict[str, torch.Tensor]:
-        scaled_audio_features = audio_features * self.alpha
-        output_embeds = inputs_embeds + scaled_audio_features
+        # scaled_audio_features = audio_features 
+        output_embeds = inputs_embeds + audio_features * self.alpha * self.aux_scalar
         output_embeds = (
             output_embeds / (torch.norm(output_embeds, dim=2, keepdim=True) + 1e-6)
         ) * torch.norm(inputs_embeds, dim=2, keepdim=True)

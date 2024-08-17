@@ -228,6 +228,9 @@ def _load_model_for_stage_2(model: MmLlama):
         bias="none",
     )
     model = model.apply_training_lora(lora_config)
+    model.aux_scalar = 1 / args.epochs
+    model.freeze_scaling()
+    model.freeze_projector()
 
     return model
 
@@ -461,24 +464,18 @@ def set_auxilary_changes(**kwargs):
         _set_stage_2_changes(**kwargs)
 
 
-patience = 2
-
-
 def _set_stage_1_changes(model, best_loss: float, eval_losses: list[float], **_):
     pass
-    # global patience
-    # if eval_losses[-1] + 0.01 > best_loss:
-    #     patience -= 1
-    # else:
-    #     patience = 2
-    # if patience == 0:
-    #     print("unfreezing scaling")
-    #     model.unfreeze_scaling()
 
 
-def _set_stage_2_changes(model, epoch, **_):
-    if epoch > args.time_till_aux:
+def _set_stage_2_changes(model: MmLlamaMerge, epoch, **_):
+    if epoch == 10:
+        print("Unfreezing scaling and projector")
         model.unfreeze_scaling()
+        model.unfreeze_projector()
+
+    model.aux_scalar = min(1, epoch / 10)
+    print("Using aux_scalar of", model.aux_scalar)
 
 
 def save_model(accelerator: Accelerator, tokenizer, model):
