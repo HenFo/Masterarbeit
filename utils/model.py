@@ -83,10 +83,12 @@ class ModalityProjector(nn.Module):
         self.proj1 = nn.Linear(ac_dim, t_dim)
         self.ac = nn.SiLU()
         self.proj2 = nn.Linear(t_dim, t_dim)
+        self.dropout = nn.Dropout(0.1)
 
     def forward(self, acoustic_embeddings: torch.Tensor):
-        projected = self.proj1(acoustic_embeddings)
-        projected = self.ac(projected)
+        # projected = self.dropout(acoustic_embeddings)
+        projected = self.ac(self.proj1(acoustic_embeddings))
+        projected = self.dropout(projected)
         projected = self.proj2(projected)
 
         return projected
@@ -112,10 +114,11 @@ class MmLlamaConfig(PretrainedConfig):
 
 
 class MmLlama(nn.Module, ABC):
-    def __init__(self, config: MmLlamaConfig, train_llm: bool = False) -> None:
+    def __init__(self, config: MmLlamaConfig, train_llm: bool = False, output_attention_weights: bool = False) -> None:
         super(MmLlama, self).__init__()
         self.config = config
         self.train_llm = train_llm
+        self.output_attention_weights = output_attention_weights
         self.llama = AutoModelForCausalLM.from_pretrained(
             config.llm_config._name_or_path
         ).half()
@@ -172,7 +175,7 @@ class MmLlama(nn.Module, ABC):
         **kwargs,
     ):
         inputs = self._get_inputs(text, acoustic)
-        return self.llama(**inputs, output_attentions=False)
+        return self.llama(**inputs, output_attentions=self.output_attention_weights)
 
     @abstractmethod
     def _get_inputs(
