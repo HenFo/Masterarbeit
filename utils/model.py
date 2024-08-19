@@ -118,7 +118,12 @@ class MmLlamaConfig(PretrainedConfig):
 
 
 class MmLlama(nn.Module, ABC):
-    def __init__(self, config: MmLlamaConfig, train_llm: bool = False, output_attention_weights: bool = False) -> None:
+    def __init__(
+        self,
+        config: MmLlamaConfig,
+        train_llm: bool = False,
+        output_attention_weights: bool = False,
+    ) -> None:
         super(MmLlama, self).__init__()
         self.config = config
         self.train_llm = train_llm
@@ -166,7 +171,7 @@ class MmLlama(nn.Module, ABC):
     def unfreeze_projector(self):
         for param in self.projector.parameters():
             param.requires_grad = True
-    
+
     def freeze_projector(self):
         for param in self.projector.parameters():
             param.requires_grad = False
@@ -216,10 +221,15 @@ class MmLlama(nn.Module, ABC):
         return state_dict
 
     def apply_training_lora(
-        self, lora_config: PeftConfig | None, adapter_id:str | None = None, resume_training:bool = False
+        self,
+        lora_config: PeftConfig | None,
+        adapter_id: str | None = None,
+        resume_training: bool = False,
     ):
-        assert lora_config is not None or (adapter_id is not None and resume_training is True)
-        
+        assert lora_config is not None or (
+            adapter_id is not None and resume_training is True
+        )
+
         if resume_training and adapter_id is not None:
             self.llama = PeftModel.from_pretrained(
                 self.llama, adapter_id, is_trainable=resume_training
@@ -227,8 +237,8 @@ class MmLlama(nn.Module, ABC):
         else:
             self.llama = get_peft_model(self.llama, lora_config)
         return self
-    
-    def apply_inference_lora(self, adapter_id:str):
+
+    def apply_inference_lora(self, adapter_id: str):
         try:
             self.llama = PeftModel.from_pretrained(self.llama, adapter_id)
             self.llama = self.llama.merge_and_unload(progressbar=True)
@@ -413,12 +423,15 @@ class MmLlamaConcat(MmLlama):
 
 class MmLlamaMerge(MmLlamaConcat):
     def __init__(
-        self, config: MmLlamaConfig, train_llm: bool = False, alpha: float = 1.0, aux_scalar: float = 1.0
+        self,
+        config: MmLlamaConfig,
+        train_llm: bool = False,
+        alpha: float = 1.0,
+        aux_scalar: float = 1.0,
     ) -> None:
         super(MmLlamaMerge, self).__init__(config, train_llm)
         self.alpha = nn.Parameter(torch.tensor(alpha, dtype=torch.float16))
         self.aux_scalar = aux_scalar
-
 
     def freeze_scaling(self):
         self.alpha.requires_grad = False
@@ -497,7 +510,6 @@ class MmLlamaMerge(MmLlamaConcat):
         input_attention_mask: torch.Tensor,
         labels: Union[torch.Tensor, None],
     ) -> Dict[str, torch.Tensor]:
-        # scaled_audio_features = audio_features 
         output_embeds = inputs_embeds + (audio_features * self.alpha * self.aux_scalar)
         output_embeds = (
             output_embeds / (torch.norm(output_embeds, dim=2, keepdim=True) + 1e-6)
