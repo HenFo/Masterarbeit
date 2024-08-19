@@ -416,7 +416,7 @@ class MmLlamaMerge(MmLlamaConcat):
         self, config: MmLlamaConfig, train_llm: bool = False, alpha: float = 1.0, aux_scalar: float = 1.0
     ) -> None:
         super(MmLlamaMerge, self).__init__(config, train_llm)
-        self.alpha = nn.Parameter(torch.tensor(alpha))
+        self.alpha = nn.Parameter(torch.tensor(alpha, dtype=torch.float16))
         self.aux_scalar = aux_scalar
 
 
@@ -444,10 +444,11 @@ class MmLlamaMerge(MmLlamaConcat):
             return text
 
         acoustic_embeddings = self.wave2vec2(**acoustic).last_hidden_state.detach()
+        acoustic_embeddings = self.projector(acoustic_embeddings)
+
         acoustic_embeddings = self.aggregate_temporal_features(
             acoustic_embeddings, input_ids
         )
-        acoustic_embeddings = self.projector(acoustic_embeddings)
 
         compute_type = acoustic_embeddings.dtype
         text_embeddings = text_embeddings.to(compute_type)
@@ -497,7 +498,7 @@ class MmLlamaMerge(MmLlamaConcat):
         labels: Union[torch.Tensor, None],
     ) -> Dict[str, torch.Tensor]:
         # scaled_audio_features = audio_features 
-        output_embeds = inputs_embeds + audio_features * self.alpha * self.aux_scalar
+        output_embeds = inputs_embeds + (audio_features * self.alpha * self.aux_scalar)
         output_embeds = (
             output_embeds / (torch.norm(output_embeds, dim=2, keepdim=True) + 1e-6)
         ) * torch.norm(inputs_embeds, dim=2, keepdim=True)
