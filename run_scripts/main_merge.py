@@ -459,11 +459,13 @@ def set_auxilary_changes(**kwargs):
         _set_stage_2_changes(**kwargs)
 
 
-def _set_stage_1_changes(model, best_loss: float, eval_losses: list[float], **_):
-    pass
+def _set_stage_1_changes(model:MmLlamaMerge, epoch: int, **_):
+    if epoch == 10:
+        print("Unfreezing scaling and projector")
+        model.unfreeze_scaling()
 
 
-def _set_stage_2_changes(model: MmLlamaMerge, epoch, **_):
+def _set_stage_2_changes(model: MmLlamaMerge, epoch: int, **_):
     if epoch == 10:
         print("Unfreezing scaling and projector")
         model.unfreeze_scaling()
