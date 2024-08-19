@@ -11,6 +11,7 @@ from transformers.models.wav2vec2.modeling_wav2vec2 import (
     Wav2Vec2Model,
     Wav2Vec2PreTrainedModel,
 )
+from transformers.models.llama.modeling_llama import LlamaRMSNorm
 
 
 class ClassificationHead(nn.Module):
@@ -77,17 +78,20 @@ class AcousticEmotionRecogniser(Wav2Vec2PreTrainedModel):
         return params
 
 
+
 class ModalityProjector(nn.Module):
     def __init__(self, ac_dim: int, t_dim: int):
         super(ModalityProjector, self).__init__()
-        self.proj1 = nn.Linear(ac_dim, t_dim)
+        self.proj1 = nn.Linear(ac_dim, ac_dim)
         self.ac = nn.SiLU()
-        self.proj2 = nn.Linear(t_dim, t_dim)
-        self.dropout = nn.Dropout(0.1)
+        self.norm = LlamaRMSNorm(ac_dim)
+        self.proj2 = nn.Linear(ac_dim, t_dim)
+        self.dropout = nn.Dropout(0.2)
 
     def forward(self, acoustic_embeddings: torch.Tensor):
         # projected = self.dropout(acoustic_embeddings)
         projected = self.ac(self.proj1(acoustic_embeddings))
+        projected = self.norm(projected)
         projected = self.dropout(projected)
         projected = self.proj2(projected)
 

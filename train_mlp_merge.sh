@@ -52,7 +52,9 @@ if [ $TEST_ONLY = False ]; then
         --deepspeed_config "deepspeed_config.json" \
         --epochs 20 \
         --lr 2e-4 \
+        --weight_decay 1e-3 \
         --min_lr_ratio 0.5 \
+        --alpha 1.0 \
         --stage 1 \
         --resume_training \
         --window_size $WINDOW 
