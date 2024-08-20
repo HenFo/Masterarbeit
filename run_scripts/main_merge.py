@@ -208,6 +208,8 @@ def load_model_for_stage(model: nn.Module, stage: int):
         return _load_model_for_stage_1(model)
     elif stage == 2:
         return _load_model_for_stage_2(model)
+    elif stage == 3:
+        return _load_model_for_stage_3(model)
     else:
         raise ValueError("Invalid stage number")
 
@@ -234,6 +236,18 @@ def _load_model_for_stage_2(model: MmLlamaMerge):
     model.aux_scalar = 1 / args.epochs
     model.freeze_scaling()
     model.freeze_projector()
+
+    return model
+
+def _load_model_for_stage_3(model: MmLlamaMerge):
+    model.load_state_dict(
+        torch.load(os.path.join(args.checkpoint_path, "best_model.pth")), strict=False
+    )
+
+    model = model.apply_training_lora(adapter_id=args.checkpoint_path, resume_training=args.train_llm)
+    model.unfreeze_scaling()
+    model.freeze_projector()
+    model.freeze_encoder(train_norm=False)
 
     return model
 

@@ -34,7 +34,8 @@ fi
 
 
 stage_1_path=$OUTPUT_PATH"stage_1/"
-output_path=$OUTPUT_PATH"stage_2/"
+stage_2_path=$OUTPUT_PATH"stage_2/"
+stage_3_path=$OUTPUT_PATH"stage_3/"
 
 if [ $TEST_ONLY = False ]; then
     echo "Running stage 1"
@@ -72,7 +73,7 @@ if [ $TEST_ONLY = False ]; then
         --llm_id $LANGUAGE_MODEL \
         --acoustic_id $ACOUSTIC_MODEL \
         --adapter_id $LORA_ADAPTER \
-        --output_path $output_path \
+        --output_path $stage_2_path \
         --checkpoint_path $stage_1_path \
         --train_dataset $DS_TRAIN_PATH \
         --test_dataset $DS_TEST_PATH \
@@ -98,6 +99,32 @@ if [ $TEST_ONLY = False ]; then
         exit 1
     fi
 
+    echo "Running stage 3"
+    accelerate launch ./run_scripts/main_merge.py \
+        --batch_size 2 \
+        --gradient_accumulation_steps 16 \
+        --llm_id $LANGUAGE_MODEL \
+        --acoustic_id $ACOUSTIC_MODEL \
+        --adapter_id $LORA_ADAPTER \
+        --output_path $stage_3_path \
+        --checkpoint_path $stage_2_path \
+        --train_dataset $DS_TRAIN_PATH \
+        --test_dataset $DS_TEST_PATH \
+        --dev_dataset $DS_DEV_PATH \
+        --task "normal" \
+        --deepspeed_config "deepspeed_config.json" \
+        --epochs 20 \
+        --lr 2e-4 \
+        --min_lr_ratio 0.5 \
+        --stage 3 \
+        --window_size $WINDOW 
+        # --resume_training 
+
+
+    if [ $? -ne 0 ]; then
+        echo "An error occurred. Terminating."
+        exit 1
+    fi
 
 fi
 
