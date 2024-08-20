@@ -16,7 +16,7 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     LlamaTokenizerFast,
-    get_linear_schedule_with_warmup,
+    set_seed,
 )
 from accelerate.utils import broadcast_object_list
 
@@ -80,6 +80,7 @@ class Args:
     time_till_aux: int = epochs
     do_auxilary_task: bool = False
     alpha: float = 1.0
+    seed: int = 42
 
 
 def parse_args():
@@ -115,6 +116,7 @@ def parse_args():
     parser.add_argument("--time_till_aux", type=int, default=15)
     parser.add_argument("--do_auxilary_task", action="store_true")
     parser.add_argument("--alpha", type=float, default=1.0)
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
     return Args(**vars(args))
 
@@ -123,6 +125,7 @@ args = parse_args()
 
 print(args)
 
+set_seed(args.seed)
 
 # args = Args(
 #     batch_size=2,
