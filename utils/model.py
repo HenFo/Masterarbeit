@@ -222,18 +222,19 @@ class MmLlama(nn.Module, ABC):
 
     def apply_training_lora(
         self,
-        lora_config: PeftConfig | None,
+        lora_config: PeftConfig | None = None,
         adapter_id: str | None = None,
         resume_training: bool = False,
     ):
-        assert lora_config is not None or (
-            adapter_id is not None and resume_training is True
-        )
+        assert lora_config is not None or adapter_id is not None
 
-        if resume_training and adapter_id is not None:
-            self.llama = PeftModel.from_pretrained(
-                self.llama, adapter_id, is_trainable=resume_training
-            )
+        if adapter_id is not None:
+            try:
+                self.llama = PeftModel.from_pretrained(
+                    self.llama, adapter_id, is_trainable=resume_training
+                )
+            except ValueError:
+                print("!!!!!!!!! Could not load the adapter for training !!!!!!!!!")
         else:
             self.llama = get_peft_model(self.llama, lora_config)
         return self
@@ -243,7 +244,7 @@ class MmLlama(nn.Module, ABC):
             self.llama = PeftModel.from_pretrained(self.llama, adapter_id)
             self.llama = self.llama.merge_and_unload(progressbar=True)
         except Exception:
-            print("Could not load the adapter for inference")
+            print("!!!!!!!!! Could not load the adapter for inference !!!!!!!!!")
         return self
 
     def save_pretrained(self, *args, **kwargs):
