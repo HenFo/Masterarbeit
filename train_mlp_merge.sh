@@ -36,6 +36,7 @@ fi
 stage_1_path=$OUTPUT_PATH"stage_1/"
 stage_2_path=$OUTPUT_PATH"stage_2/"
 stage_3_path=$OUTPUT_PATH"stage_3/"
+output_path=""
 
 if [ $TEST_ONLY = False ]; then
     echo "Running stage 1"
@@ -65,6 +66,10 @@ if [ $TEST_ONLY = False ]; then
         echo "An error occurred. Terminating."
         exit 1
     fi
+
+    output_path=$stage_1_path
+
+    cp $stage_1_path"best_model.pth" $stage_2_path
 
     echo "Running stage 2"
     accelerate launch ./run_scripts/main_merge.py \
@@ -120,11 +125,15 @@ if [ $TEST_ONLY = False ]; then
         --window_size $WINDOW 
         # --resume_training 
 
+    output_path=$stage_2_path
 
     if [ $? -ne 0 ]; then
         echo "An error occurred. Terminating."
         exit 1
     fi
+    # cp $stage_2_path"best_model.pth" $stage_3_path
+
+    # output_path=$stage_3_path
 
 fi
 
@@ -134,7 +143,7 @@ python run_scripts/main_merge.py \
     --llm_id $LANGUAGE_MODEL \
     --acoustic_id $ACOUSTIC_MODEL \
     --adapter_id $LORA_ADAPTER \
-    --output_path $stage_1_path \
+    --output_path $output_path \
     --test_dataset $DS_TEST_PATH \
     --dev_dataset $DS_DEV_PATH \
     --window_size $WINDOW \
