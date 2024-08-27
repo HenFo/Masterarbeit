@@ -300,7 +300,10 @@ class ERCDataset(Dataset, ABC):
                 dialog_chain = f"<audio> {dialog_chain}"
         if include_text:
             if self.audio_placement == "enclose":
-                instruction += f"\"<audio> {target['Utterance']} </audio>\""
+                target_utterance = f"<audio> {target['Utterance']} </audio>"
+                instruction += f"\"{target_utterance}\""
+                idx = dialog_chain.rfind(target["Utterance"])
+                dialog_chain = dialog_chain[:idx] + target_utterance + dialog_chain[idx + len(target["Utterance"]):]
             else:
                 instruction += f"\"{target['Utterance']}\""
 
@@ -430,6 +433,5 @@ if __name__ == "__main__":
         PATH, mode="test", window=3, task="normal", audio_placement="enclose"
     )
 
-    for i in range(len(ds)):
-        x = ds[i]
+    x = ds[3]
     print(x)

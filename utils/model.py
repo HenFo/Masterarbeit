@@ -480,25 +480,36 @@ class MmLlamaMerge(MmLlamaConcat):
         vectors: torch.Tensor,
         input_ids: torch.Tensor,
     ):
-        audio_start_location = torch.where(input_ids == self.config.audio_token_id)[1]
-        audio_end_location = torch.where(input_ids == self.config.audio_end_token_id)[1]
-        num_vectors = audio_end_location - audio_start_location - 1
+        audio_start_location = torch.where(input_ids == self.config.audio_token_id)[1].view(input_ids.size(0), -1)
+        audio_end_location = torch.where(input_ids == self.config.audio_end_token_id)[1].view(input_ids.size(0), -1)
+        num_vectors = (audio_end_location - audio_start_location - 1)
+        if num_vectors.size(1) > 1:
+            assert torch.all(num_vectors[:,0] == num_vectors[:,1]), "Utterances should be of the same length"
+        num_vectors = num_vectors[:,0]
         temporal_dim = input_ids.size(1)
+        feature_dim = vectors.size(2)
 
         aggregated = []
         for i, target_length in enumerate(num_vectors):
-            agg = interpolate_temporal_features(vectors[None, i], target_length)
-            agg = F.pad(
-                agg,
-                (
+            if target_length == 0:
+                aggregated.append(torch.zeros((temporal_dim, feature_dim), dtype=vectors.dtype, device=vectors.device))
+                continue
+
+            agg_features = interpolate_temporal_features(vectors[None, i], target_length)
+            agg = torch.zeros(1, temporal_dim, feature_dim, dtype=agg_features.dtype, device=agg_features.device)
+            for st in audio_start_location[i]:
+                agg_padded = F.pad(
+                    agg_features,
+                    (
+                        0,
+                        0,
+                        st + 1,
+                        temporal_dim - st - target_length - 1,
+                    ),
+                    "constant",
                     0,
-                    0,
-                    audio_start_location[i] + 1,
-                    temporal_dim - audio_start_location[i] - target_length - 1,
-                ),
-                "constant",
-                0,
-            )
+                )
+                agg += agg_padded
             aggregated.append(agg[0])
 
         return torch.stack(aggregated)
@@ -522,7 +533,7 @@ class MmLlamaMerge(MmLlamaConcat):
             )
             bs, ts, fs = vector_sequence.size()
             if torch.any(audio_tokens):
-                return vector_sequence[~audio_tokens].view(bs, ts - 2, fs)
+                return vector_sequence[~audio_tokens].view(bs, -1, fs)
             return vector_sequence
 
         final_embedding = remove_audio_tokens(output_embeds)
