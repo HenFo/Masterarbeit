@@ -3,6 +3,7 @@ import math
 import os
 import sys
 from dataclasses import dataclass
+from typing import Callable
 
 import torch
 from accelerate import Accelerator
@@ -201,7 +202,7 @@ def load_tokenizer():
     return tokenizer
 
 
-def load_model_for_stage(model: nn.Module, stage: int):
+def load_model_for_stage(model: nn.Module, stage: int) -> tuple[MmLlamaMerge, Callable[[MmLlamaMerge], MmLlamaMerge]]:
     if stage == 1:
         return _load_model_for_stage_1(model)
     elif stage == 2:
@@ -214,9 +215,10 @@ def load_model_for_stage(model: nn.Module, stage: int):
 
 def _load_model_for_stage_1(model: MmLlamaMerge):
     """Load model for stage 1 training (Projector training)"""
-    model.freeze_encoder(train_norm=True)
-    model.freeze_scaling()
-    return model
+    def execute_after_prepare(model:MmLlamaMerge):
+        model.freeze_encoder(train_norm=True)
+        return model
+    return model, execute_after_prepare
 
 
 def _load_model_for_stage_2(model: MmLlamaMerge):
@@ -231,11 +233,14 @@ def _load_model_for_stage_2(model: MmLlamaMerge):
         bias="none",
     )
     model = model.apply_training_lora(lora_config)
-    model.aux_scalar = 1 / args.epochs
-    model.freeze_scaling()
-    model.freeze_projector()
 
-    return model
+    def execute_after_prepare(model:MmLlamaMerge):
+        print("Freezing scaling and projector")
+        model.freeze_projector()
+        model.freeze_scaling()
+        return model
+
+    return model, execute_after_prepare
 
 def _load_model_for_stage_3(model: MmLlamaMerge):
     model.load_state_dict(
@@ -243,11 +248,14 @@ def _load_model_for_stage_3(model: MmLlamaMerge):
     )
 
     model = model.apply_training_lora(adapter_id=args.checkpoint_path, resume_training=args.train_llm)
-    model.unfreeze_scaling()
-    model.freeze_projector()
-    model.freeze_encoder(train_norm=False)
 
-    return model
+    def execute_after_prepare(model:MmLlamaMerge):
+        model.unfreeze_scaling()
+        model.freeze_projector()
+        model.freeze_encoder(train_norm=False)
+        return model
+
+    return model, execute_after_prepare
 
 
 def load_model_for_test(model: MmLlama):
@@ -332,7 +340,7 @@ def train():
     )
     # get model
     model = MmLlamaMerge(config, train_llm=args.train_llm, alpha=args.alpha)
-    model = load_model_for_stage(model, args.stage)
+    model, execute_after_prepare = load_model_for_stage(model, args.stage)
 
     # setup optimizer
     grouped_parameters = get_grouped_parameters(model)
@@ -350,6 +358,8 @@ def train():
     (model, optimizer, lr_scheduler, train_dataloader) = accelerator.prepare(
         model, optimizer, lr_scheduler, train_dataloader
     )
+
+    model = execute_after_prepare(model)
 
     accelerator.register_for_checkpointing(lr_scheduler)
 
