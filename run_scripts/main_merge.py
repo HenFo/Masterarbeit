@@ -64,7 +64,6 @@ class Args:
     stage: int = 1
     batch_size: int = 3
     eval_batch_size: int = 1
-    deepspeed_config: str = None
     lr: float = 2e-5
     epochs: int = 15
     warmup_ratio: float = 0.1
@@ -101,7 +100,6 @@ def parse_args():
     parser.add_argument("--window_size", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=3)
     parser.add_argument("--eval_batch_size", type=int, default=1)
-    parser.add_argument("--deepspeed_config", type=str, default=None)
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--warmup_ratio", type=float, default=0.1)

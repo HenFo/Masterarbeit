@@ -51,7 +51,6 @@ if [ $TEST_ONLY = False ]; then
         --test_dataset $DS_TEST_PATH \
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
-        --deepspeed_config "deepspeed_config.json" \
         --epochs 20 \
         --lr 2e-4 \
         --weight_decay 1e-3 \
@@ -84,7 +83,6 @@ if [ $TEST_ONLY = False ]; then
         --test_dataset $DS_TEST_PATH \
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
-        --deepspeed_config "deepspeed_config.json" \
         --epochs 20 \
         --lr 2e-4 \
         --min_lr_ratio 0.2 \
@@ -117,7 +115,6 @@ if [ $TEST_ONLY = False ]; then
         --test_dataset $DS_TEST_PATH \
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
-        --deepspeed_config "deepspeed_config.json" \
         --epochs 20 \
         --lr 2e-4 \
         --min_lr_ratio 0.5 \
