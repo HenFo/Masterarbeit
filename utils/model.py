@@ -226,7 +226,7 @@ class MmLlama(nn.Module, ABC):
         adapter_id: str | None = None,
         resume_training: bool = False,
     ):
-        assert lora_config is not None or adapter_id is not None
+        assert lora_config is not None or adapter_id is not None, "Either lora_config or adapter_id must be provided"
 
         if adapter_id is not None:
             try:
@@ -236,8 +236,31 @@ class MmLlama(nn.Module, ABC):
             except ValueError:
                 print("!!!!!!!!! Could not load the adapter for training !!!!!!!!!")
         else:
+            print("####### Applying new Lora-Adapter #######")
             self.llama = get_peft_model(self.llama, lora_config)
         return self
+    
+    def print_trainable_parameters(self):
+         param_sum = 0
+         total_sum = 0
+         for p in self.parameters():
+             if p.requires_grad:
+                 param_sum += p.numel()
+             total_sum += p.numel()
+        
+         trainable_percentage = (param_sum / total_sum) * 100
+         formatted_trainable_percentage = f"{trainable_percentage:.2f}"
+         trainable_percentage_parts = formatted_trainable_percentage.split(".")
+         trainable_percentage_parts[0] = trainable_percentage_parts[0].replace(
+             "," , " "
+         )
+         formatted_trainable_percentage = ".".join(trainable_percentage_parts)
+         
+         formatted_param_sum = format(param_sum, ",")
+         formatted_total_sum = format(total_sum, ",")
+         print(f"Trainable parameters: {formatted_param_sum}/{formatted_total_sum} ({formatted_trainable_percentage}%)")
+         
+        
 
     def apply_inference_lora(self, adapter_id: str):
         try:
