@@ -230,6 +230,7 @@ def _load_model_for_stage_2(model: MmLlamaMerge):
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
         target_modules=args.lora_module_name,
+        use_rslora=True,
         bias="none",
     )
     model = model.apply_training_lora(lora_config)
