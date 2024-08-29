@@ -86,7 +86,7 @@ class ModalityProjector(nn.Module):
         self.ac = nn.SiLU()
         self.norm = LlamaRMSNorm(ac_dim)
         self.proj2 = nn.Linear(ac_dim, t_dim)
-        self.dropout = nn.Dropout(0.2)
+        self.dropout = nn.Dropout(0.15)
 
     def forward(self, acoustic_embeddings: torch.Tensor):
         # projected = self.dropout(acoustic_embeddings)
@@ -451,11 +451,21 @@ class MmLlamaMerge(MmLlamaConcat):
         config: MmLlamaConfig,
         train_llm: bool = False,
         alpha: float = 1.0,
-        aux_scalar: float = 1.0,
+        aux_scalar: float = 0.5,
     ) -> None:
         super(MmLlamaMerge, self).__init__(config, train_llm)
-        self.alpha = nn.Parameter(torch.tensor(alpha, dtype=torch.float16))
+        self.alpha = nn.Parameter(torch.tensor([alpha]))
         self.aux_scalar = aux_scalar
+        self.temp_aux = aux_scalar
+
+    def eval(self, *args, **kwargs):
+        super().eval(*args, **kwargs)
+        self.temp_aux = self.aux_scalar
+        self.aux_scalar = 0.5
+
+    def train(self, *args, **kwargs):
+        super().train(*args, **kwargs)
+        self.aux_scalar = self.temp_aux
 
     def freeze_scaling(self):
         self.alpha.requires_grad = False
@@ -545,7 +555,7 @@ class MmLlamaMerge(MmLlamaConcat):
         input_attention_mask: torch.Tensor,
         labels: Union[torch.Tensor, None],
     ) -> Dict[str, torch.Tensor]:
-        output_embeds = inputs_embeds + (audio_features * self.alpha * self.aux_scalar)
+        output_embeds = inputs_embeds * self.aux_scalar + (audio_features * self.alpha * (1 - self.aux_scalar))
         output_embeds = (
             output_embeds / (torch.norm(output_embeds, dim=2, keepdim=True) + 1e-6)
         ) * torch.norm(inputs_embeds, dim=2, keepdim=True)

@@ -4,6 +4,7 @@ import os
 import sys
 from dataclasses import dataclass
 from typing import Callable, Type
+import numpy as np
 
 import torch
 from accelerate import Accelerator
@@ -476,6 +477,7 @@ def train():
                 epoch=epoch,
                 best_loss=best_eval_loss,
                 eval_losses=eval_losses,
+                train_losses=train_losses,
             )
 
 
@@ -486,20 +488,41 @@ def set_auxilary_changes(**kwargs):
         _set_stage_2_changes(**kwargs)
 
 
-def _set_stage_1_changes(model:MmLlamaMerge, epoch: int, **_):
-    if epoch == 10:
-        print("Unfreezing scaling and projector")
-        model.unfreeze_scaling()
+def _set_stage_1_changes(model: MmLlamaMerge, epoch: int, **_):
+    pass
 
 
-def _set_stage_2_changes(model: MmLlamaMerge, epoch: int, **_):
-    if epoch == 10:
-        print("Unfreezing scaling and projector")
-        model.unfreeze_scaling()
-        model.unfreeze_projector()
+stage_2_wait_counter = 3
 
-    model.aux_scalar = min(1, epoch / 10)
-    print("Using aux_scalar of", model.aux_scalar)
+
+def _set_stage_2_changes(
+    model: MmLlamaMerge,
+    train_losses: list[float],
+    eval_losses: list[float],
+    epoch: int,
+    **_,
+):
+    window = 3
+
+    def mean_gradient(losses: list[float], window_size: int) -> float:
+        if len(losses) < window_size:
+            return 0.0
+        return np.mean(np.diff(losses[-window_size:]))
+
+    global stage_2_wait_counter
+    if stage_2_wait_counter > 0:
+        stage_2_wait_counter -= 1
+        return
+
+    train_gradient = mean_gradient(train_losses, window)
+    eval_gradient = mean_gradient(eval_losses, window)
+
+    if train_gradient < 0 and eval_gradient > 0.02:
+        stage_2_wait_counter = window
+        model.aux_scalar = 0.25 * (1 + math.cos(math.pi * (epoch / args.epochs) * 2))
+        print(
+            f"Setting aux_scalar to {model.aux_scalar}: input_embeds * {model.aux_scalar}, acoustic * {1 - model.aux_scalar}"
+        )
 
 
 def save_model(accelerator: Accelerator, tokenizer, model):
