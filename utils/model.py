@@ -78,7 +78,6 @@ class AcousticEmotionRecogniser(Wav2Vec2PreTrainedModel):
         return params
 
 
-
 class ModalityProjector(nn.Module):
     def __init__(self, ac_dim: int, t_dim: int):
         super(ModalityProjector, self).__init__()
@@ -226,7 +225,9 @@ class MmLlama(nn.Module, ABC):
         adapter_id: str | None = None,
         resume_training: bool = False,
     ):
-        assert lora_config is not None or adapter_id is not None, "Either lora_config or adapter_id must be provided"
+        assert (
+            lora_config is not None or adapter_id is not None
+        ), "Either lora_config or adapter_id must be provided"
 
         if adapter_id is not None:
             try:
@@ -239,28 +240,26 @@ class MmLlama(nn.Module, ABC):
             print("####### Applying new Lora-Adapter #######")
             self.llama = get_peft_model(self.llama, lora_config)
         return self
-    
+
     def print_trainable_parameters(self):
-         param_sum = 0
-         total_sum = 0
-         for p in self.parameters():
-             if p.requires_grad:
-                 param_sum += p.numel()
-             total_sum += p.numel()
-        
-         trainable_percentage = (param_sum / total_sum) * 100
-         formatted_trainable_percentage = f"{trainable_percentage:.2f}"
-         trainable_percentage_parts = formatted_trainable_percentage.split(".")
-         trainable_percentage_parts[0] = trainable_percentage_parts[0].replace(
-             "," , " "
-         )
-         formatted_trainable_percentage = ".".join(trainable_percentage_parts)
-         
-         formatted_param_sum = format(param_sum, ",")
-         formatted_total_sum = format(total_sum, ",")
-         print(f"Trainable parameters: {formatted_param_sum}/{formatted_total_sum} ({formatted_trainable_percentage}%)")
-         
-        
+        param_sum = 0
+        total_sum = 0
+        for p in self.parameters():
+            if p.requires_grad:
+                param_sum += p.numel()
+            total_sum += p.numel()
+
+        trainable_percentage = (param_sum / total_sum) * 100
+        formatted_trainable_percentage = f"{trainable_percentage:.2f}"
+        trainable_percentage_parts = formatted_trainable_percentage.split(".")
+        trainable_percentage_parts[0] = trainable_percentage_parts[0].replace(",", " ")
+        formatted_trainable_percentage = ".".join(trainable_percentage_parts)
+
+        formatted_param_sum = format(param_sum, ",")
+        formatted_total_sum = format(total_sum, ",")
+        print(
+            f"Trainable parameters: {formatted_param_sum}/{formatted_total_sum} ({formatted_trainable_percentage}%)"
+        )
 
     def apply_inference_lora(self, adapter_id: str):
         try:
@@ -513,23 +512,43 @@ class MmLlamaMerge(MmLlamaConcat):
         vectors: torch.Tensor,
         input_ids: torch.Tensor,
     ):
-        audio_start_location = torch.where(input_ids == self.config.audio_token_id)[1].view(input_ids.size(0), -1)
-        audio_end_location = torch.where(input_ids == self.config.audio_end_token_id)[1].view(input_ids.size(0), -1)
-        num_vectors = (audio_end_location - audio_start_location - 1)
+        audio_start_location = torch.where(input_ids == self.config.audio_token_id)[
+            1
+        ].view(input_ids.size(0), -1)
+        audio_end_location = torch.where(input_ids == self.config.audio_end_token_id)[
+            1
+        ].view(input_ids.size(0), -1)
+        num_vectors = audio_end_location - audio_start_location - 1
         if num_vectors.size(1) > 1:
-            assert torch.all(num_vectors[:,0] == num_vectors[:,1]), "Utterances should be of the same length"
-        num_vectors = num_vectors[:,0]
+            assert torch.all(
+                num_vectors[:, 0] == num_vectors[:, 1]
+            ), "Utterances should be of the same length"
+        num_vectors = num_vectors[:, 0]
         temporal_dim = input_ids.size(1)
         feature_dim = vectors.size(2)
 
         aggregated = []
         for i, target_length in enumerate(num_vectors):
             if target_length == 0:
-                aggregated.append(torch.zeros((temporal_dim, feature_dim), dtype=vectors.dtype, device=vectors.device))
+                aggregated.append(
+                    torch.zeros(
+                        (temporal_dim, feature_dim),
+                        dtype=vectors.dtype,
+                        device=vectors.device,
+                    )
+                )
                 continue
 
-            agg_features = interpolate_temporal_features(vectors[None, i], target_length)
-            agg = torch.zeros(1, temporal_dim, feature_dim, dtype=agg_features.dtype, device=agg_features.device)
+            agg_features = interpolate_temporal_features(
+                vectors[None, i], target_length
+            )
+            agg = torch.zeros(
+                1,
+                temporal_dim,
+                feature_dim,
+                dtype=agg_features.dtype,
+                device=agg_features.device,
+            )
             for st in audio_start_location[i]:
                 agg_padded = F.pad(
                     agg_features,
@@ -555,7 +574,9 @@ class MmLlamaMerge(MmLlamaConcat):
         input_attention_mask: torch.Tensor,
         labels: Union[torch.Tensor, None],
     ) -> Dict[str, torch.Tensor]:
-        output_embeds = inputs_embeds * self.aux_scalar + (audio_features * self.alpha * (1 - self.aux_scalar))
+        output_embeds = inputs_embeds * self.aux_scalar + (
+            audio_features * self.alpha * (1 - self.aux_scalar)
+        )
         output_embeds = (
             output_embeds / (torch.norm(output_embeds, dim=2, keepdim=True) + 1e-6)
         ) * torch.norm(inputs_embeds, dim=2, keepdim=True)

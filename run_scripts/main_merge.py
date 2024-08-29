@@ -182,6 +182,7 @@ def get_scheduler(
     num_steps = math.ceil(len_dataset / (batch_size * gradient_accumulation_steps))
     num_steps *= epochs
     warmup_steps = math.ceil(num_steps * args.warmup_ratio)
+
     def cosine_decay_with_warmup(step):
         if step < warmup_steps:
             return float(step) / max(1.0, warmup_steps)
@@ -203,7 +204,9 @@ def load_tokenizer():
     return tokenizer
 
 
-def load_model_for_stage(model: nn.Module, stage: int) -> tuple[MmLlamaMerge, Callable[[MmLlamaMerge], MmLlamaMerge]]:
+def load_model_for_stage(
+    model: nn.Module, stage: int
+) -> tuple[MmLlamaMerge, Callable[[MmLlamaMerge], MmLlamaMerge]]:
     if stage == 1:
         return _load_model_for_stage_1(model)
     elif stage == 2:
@@ -216,9 +219,11 @@ def load_model_for_stage(model: nn.Module, stage: int) -> tuple[MmLlamaMerge, Ca
 
 def _load_model_for_stage_1(model: MmLlamaMerge):
     """Load model for stage 1 training (Projector training)"""
-    def execute_after_prepare(model:MmLlamaMerge):
+
+    def execute_after_prepare(model: MmLlamaMerge):
         model.freeze_encoder(train_norm=True)
         return model
+
     return model, execute_after_prepare
 
 
@@ -236,7 +241,7 @@ def _load_model_for_stage_2(model: MmLlamaMerge):
     )
     model = model.apply_training_lora(lora_config)
 
-    def execute_after_prepare(model:MmLlamaMerge):
+    def execute_after_prepare(model: MmLlamaMerge):
         print("Freezing scaling and projector")
         model.freeze_projector()
         model.freeze_scaling()
@@ -244,14 +249,17 @@ def _load_model_for_stage_2(model: MmLlamaMerge):
 
     return model, execute_after_prepare
 
+
 def _load_model_for_stage_3(model: MmLlamaMerge):
     model.load_state_dict(
         torch.load(os.path.join(args.checkpoint_path, "best_model.pth")), strict=False
     )
 
-    model = model.apply_training_lora(adapter_id=args.checkpoint_path, resume_training=args.train_llm)
+    model = model.apply_training_lora(
+        adapter_id=args.checkpoint_path, resume_training=args.train_llm
+    )
 
-    def execute_after_prepare(model:MmLlamaMerge):
+    def execute_after_prepare(model: MmLlamaMerge):
         model.unfreeze_scaling()
         model.freeze_projector()
         model.freeze_encoder(train_norm=False)
@@ -385,7 +393,6 @@ def train():
             train_losses,
             eval_losses,
         ) = load_checkpoint(accelerator, model, checkpoint_path)
-
 
     for epoch in range(max(0, start_epoch - 1), args.epochs):
         epoch += 1
@@ -603,7 +610,7 @@ def test():
         mode="test",
         audio_placement="enclose",
         task="normal",
-        window=args.window_size
+        window=args.window_size,
     )
 
     test_dataloader_f1 = DataLoader(
@@ -699,6 +706,7 @@ def evaluate_f1(
 
     return f1
 
+
 def evaluate_loss(
     model: MmLlamaConcat,
     dataloader: DataLoader,
@@ -713,6 +721,7 @@ def evaluate_loss(
             running_loss += loss.item()
     running_loss /= len(dataloader)
     return running_loss
+
 
 if __name__ == "__main__":
     if args.evaluation:
