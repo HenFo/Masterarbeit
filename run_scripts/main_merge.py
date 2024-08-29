@@ -454,7 +454,7 @@ def train():
 
         if running_loss == math.nan:
             print("nan loss, stopping training")
-            break
+            exit(1)
 
         print("###### Saving checkpoint ######")
         save_checkpoint(
