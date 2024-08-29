@@ -5,7 +5,7 @@ from torch.utils.data import Dataset
 import torchaudio.transforms as AT
 import numpy as np
 import pandas as pd
-from typing import List, Tuple, Union
+from typing import List, Tuple
 import os
 from tqdm.auto import tqdm
 from functools import lru_cache

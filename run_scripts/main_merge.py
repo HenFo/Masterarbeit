@@ -3,7 +3,7 @@ import math
 import os
 import sys
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Type
 
 import torch
 from accelerate import Accelerator
@@ -258,7 +258,7 @@ def _load_model_for_stage_3(model: MmLlamaMerge):
     return model, execute_after_prepare
 
 
-def load_model_for_test(model: MmLlama):
+def load_model_for_test(model: MmLlamaMerge):
     model.load_state_dict(
         torch.load(os.path.join(args.output_path, "best_model.pth")), strict=False
     )
@@ -298,7 +298,7 @@ def setup_config_and_processor():
     return tokenizer, processor, config
 
 
-def dataset_class(dataset_path: str) -> ERCDataset:
+def dataset_class(dataset_path: str) -> Type[ERCDataset]:
     if "meld" in dataset_path:
         return MeldDataset
     if "iemocap" in dataset_path:
@@ -431,7 +431,8 @@ def train():
         )
 
         if accelerator.is_main_process:
-            eval_loss = evaluate(accelerator, model, epoch, eval_dataloader)
+            eval_dataloader = accelerator.prepare(eval_dataloader)
+            eval_loss = evaluate_train(model, epoch, eval_dataloader)
             eval_losses.append(eval_loss)
             if eval_loss < best_eval_loss:
                 print("Saving model")
@@ -578,26 +579,36 @@ def test():
         mode="test",
         audio_placement="enclose",
         task="normal",
+        window=args.window_size
     )
 
-    test_dataloader = DataLoader(
+    test_dataloader_f1 = DataLoader(
         test_dataset,
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=8,
         collate_fn=SequenceClassificationCollator(processor, mode="dev"),
     )
-    # get model
-    evaluate_f1(tokenizer, model, test_dataloader)
+    test_dataloader_loss = DataLoader(
+        test_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=8,
+        collate_fn=SequenceClassificationCollator(processor, mode="train"),
+    )
+
+    f1 = evaluate_f1(tokenizer, model, test_dataloader_f1)
+    print(f"F1 in Test: {f1}")
+
+    loss = evaluate_loss(model, test_dataloader_loss)
+    print(f"Loss in Test: {loss}")
 
 
-def evaluate(
-    accelerator: Accelerator,
-    model: MmLlamaConcat,
+def evaluate_train(
+    model: MmLlamaMerge,
     epoch: int,
     dataloader: DataLoader,
 ) -> float:
-    dataloader = accelerator.prepare(dataloader)
     eval_batch_iterator = tqdm(dataloader, total=len(dataloader), desc="Evaluating")
     running_loss = 0
     model.eval()
@@ -613,7 +624,7 @@ def evaluate(
 
 def evaluate_f1(
     tokenizer: LlamaTokenizerFast,
-    model: MmLlamaConcat,
+    model: MmLlamaMerge,
     dataloader: DataLoader,
 ):
     eval_batch_iterator = tqdm(dataloader, total=len(dataloader), desc="Evaluating")
@@ -662,9 +673,22 @@ def evaluate_f1(
     with open(os.path.join(args.output_path, "preds_test.json"), "wt") as f:
         json.dump(preds_for_eval, f)
 
-    print(f"F1 in Test: {f1}")
     return f1
 
+def evaluate_loss(
+    model: MmLlamaConcat,
+    dataloader: DataLoader,
+) -> float:
+    eval_batch_iterator = tqdm(dataloader, total=len(dataloader), desc="Evaluating")
+    running_loss = 0
+    model.eval()
+    for step, batch in enumerate(eval_batch_iterator):
+        with torch.no_grad():
+            outputs = model(**prepare_batch(batch))
+            loss = outputs["loss"]
+            running_loss += loss.item()
+    running_loss /= len(dataloader)
+    return running_loss
 
 if __name__ == "__main__":
     if args.evaluation:
