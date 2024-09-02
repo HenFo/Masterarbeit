@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Dict, List, Tuple, Union
 
 import torch
@@ -102,10 +103,11 @@ class MmLlamaConfig(PretrainedConfig):
         self,
         llm_config,
         audio_config,
-        audio_token_id: int,
         pad_token_id: int,
-        llm_pretrained_adapter=None,
-        audio_end_token_id=None,
+        audio_token_id: int | None = None,
+        llm_pretrained_adapter: str | None = None,
+        audio_end_token_id: int | None = None,
+        num_labels: int | None = None,
     ):
         self.llm_config = llm_config
         self.llm_pretrained_adapter = llm_pretrained_adapter
@@ -114,6 +116,7 @@ class MmLlamaConfig(PretrainedConfig):
         self.audio_end_token_id = audio_end_token_id
         self.ignore_index = -100
         self.pad_token_id = pad_token_id
+        self.num_labels = num_labels
 
 
 class MmLlama(nn.Module, ABC):
@@ -130,7 +133,8 @@ class MmLlama(nn.Module, ABC):
         self.llama = AutoModelForCausalLM.from_pretrained(
             config.llm_config._name_or_path
         ).half()
-        self.llama.resize_token_embeddings(self.config.audio_token_id + 2, 8)
+        if config.audio_token_id is not None:
+            self.llama.resize_token_embeddings(self.config.audio_token_id + 2, 8)
         if config.llm_pretrained_adapter:
             self.llama = PeftModel.from_pretrained(
                 self.llama, self.config.llm_pretrained_adapter
@@ -141,7 +145,7 @@ class MmLlama(nn.Module, ABC):
             config.audio_config._name_or_path
         ).half()
 
-        self.projector = ModalityProjector(1024, 4096)
+        self.projector = None
         self.freeze_audio_encoder()
 
     def freeze_llm(self, train_norm: bool = True):
@@ -185,7 +189,6 @@ class MmLlama(nn.Module, ABC):
         inputs = self._get_inputs(text, acoustic)
         return self.llama(**inputs, output_attentions=self.output_attention_weights)
 
-    @abstractmethod
     def _get_inputs(
         self,
         text: Dict[str, torch.Tensor],
@@ -287,6 +290,10 @@ def interpolate_temporal_features(vectors: torch.Tensor, num_vectors: int):
 
 
 class MmLlamaConcat(MmLlama):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.projector = ModalityProjector(1024, 4096)
+
     def _get_inputs(
         self,
         text: Dict[str, torch.Tensor],
@@ -457,6 +464,8 @@ class MmLlamaMerge(MmLlamaConcat):
         self.aux_scalar = aux_scalar
         self.temp_aux = aux_scalar
 
+        self.projector = ModalityProjector(1024, 4096)
+
     def eval(self, *args, **kwargs):
         super().eval(*args, **kwargs)
         self.temp_aux = self.aux_scalar
@@ -603,3 +612,70 @@ class MmLlamaMerge(MmLlamaConcat):
             "attention_mask": final_attention_mask,
             "labels": final_labels,
         }
+
+
+class LateFusionProjector(nn.Module):
+    def __init__(self, config: MmLlamaConfig, text_out:int = 128, audio_out:int = 128):
+        super(LateFusionProjector, self).__init__()
+        self.text_down_projector = nn.Linear(config.llm_config.hidden_size, text_out, bias=True)
+        self.audio_down_projector = nn.Linear(config.audio_config.hidden_size, audio_out, bias=True)
+        self.norm = LlamaRMSNorm(text_out + audio_out)
+        self.ac = nn.SiLU()
+    
+
+    def forward(self, text: torch.Tensor, audio: torch.Tensor):
+        text_down = self.text_down_projector(text)
+        audio_down = self.audio_down_projector(audio)
+        normed = self.norm(self.ac(torch.cat([text_down, audio_down], dim=-1)))
+        return normed
+
+class MmLlamaForSequenceClassification(MmLlama):
+    def __init__(self, config: MmLlamaConfig, **kwargs):
+        super(MmLlamaForSequenceClassification, self).__init__(config, **kwargs)
+        self.text_projection_size = 128
+        self.audio_projection_size = 128
+        self.projector = LateFusionProjector(config, self.text_projection_size, self.audio_projection_size)
+        self.classifier = nn.Linear(128*2, config.num_labels)
+
+        self.ignore_acoustic = False
+        self.ignore_text = False
+
+
+    @torch.autocast(device_type="cuda")
+    def forward(
+        self,
+        text: Dict[str, torch.Tensor],
+        acoustic: Dict[str, Union[torch.Tensor, None]],
+        labels: torch.LongTensor | None = None,
+        **kwargs,
+    ):
+        llm_outputs = self.llama(**text, **kwargs, output_hidden_states=True).hidden_states[-1]
+        audio_outputs = self.wave2vec2(**acoustic).last_hidden_state.detach()
+
+        # assume left padding
+        pooled_text = llm_outputs[:, -1]
+        pooled_audio = torch.mean(audio_outputs, dim=1)
+        merged = self.projector(pooled_text, pooled_audio)
+
+        if self.ignore_text:
+            merged[:, :self.text_projection_size] = 0
+
+        if self.ignore_acoustic:
+            merged[:, self.text_projection_size:] = 0
+
+        logits = self.classifier(merged)
+
+        loss = None
+        if labels is not None:
+            loss_fct = nn.CrossEntropyLoss()
+            loss = loss_fct(logits.view(-1, self.config.num_labels), labels.view(-1))
+
+        return SequenceClassifierOutput(logits=logits, loss=loss)
+
+
+@dataclass
+class SequenceClassifierOutput:
+    logits: torch.FloatTensor
+    loss: torch.FloatTensor | None = None
+    hidden_states: Tuple[torch.FloatTensor] | None = None
+    attentions: Tuple[torch.FloatTensor] | None = None

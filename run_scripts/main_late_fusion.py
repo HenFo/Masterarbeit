@@ -4,7 +4,6 @@ import os
 import sys
 from dataclasses import dataclass
 from typing import Callable, Type
-import numpy as np
 
 import torch
 from accelerate import Accelerator
@@ -23,22 +22,17 @@ from transformers import (
 from accelerate.utils import broadcast_object_list
 
 sys.path.append("/home/fock/code/MultiModalInstructERC")
-from utils.dataset import ERCDataset, IemocapDataset
+
+from utils.model import MmLlama, MmLlamaConcat, MmLlamaConfig, MmLlamaForSequenceClassification
+from utils.processor import MmLlamaProcessor
+from utils.collator import SequenceClassificationCollator
+from utils.dataset import ERCDataset, IemocapDataset, MeldDataset
 
 import argparse
 
 import torch.nn as nn
 from peft import LoraConfig
 
-from utils import (
-    MeldDataset,
-    MmLlama,
-    MmLlamaConcat,
-    MmLlamaConfig,
-    MmLlamaMerge,
-    MmLlamaProcessor,
-    SequenceGenerationCollator,
-)
 
 # LANGUAGE_MODEL = "/home/fock/code/MultiModalInstructERC/models/language/LLaMA2"
 # LORA_ADAPTER = "/home/fock/code/MultiModalInstructERC/models/language/adapter/InstructERC_unbalanced"
@@ -127,26 +121,6 @@ print(args)
 
 set_seed(args.seed)
 
-# args = Args(
-#     batch_size=2,
-#     gradient_accumulation_steps=16,
-#     llm_id=LANGUAGE_MODEL,
-#     acoustic_id=ACOUSTIC_MODEL,
-#     adapter_id=LORA_ADAPTER,
-#     output_path=OUTPUT_PATH,
-#     checkpoint_path="/home/fock/code/MultiModalInstructERC/experiments/multimodal/mlp/concat/interpolate/stage_1",
-#     train_dataset=DS_TRAIN_PATH,
-#     test_dataset=DS_TEST_PATH,
-#     dev_dataset=DS_DEV_PATH,
-#     task="normal",
-#     deepspeed_config="deepspeed_config.json",
-#     epochs=7,
-#     lr=1e-5,
-#     train_llm=True,
-#     resume_training=False,
-#     stage=1
-# )
-
 
 def get_grouped_parameters(model):
     no_decay = ["bias", "norm.weight"]
@@ -198,7 +172,6 @@ def get_scheduler(
 
 def load_tokenizer():
     tokenizer = AutoTokenizer.from_pretrained(args.llm_id)
-    tokenizer.add_special_tokens({"additional_special_tokens": ["<audio>", "</audio>"]})
     tokenizer.pad_token_id = tokenizer.unk_token_id
     tokenizer.padding_side = "left"
     return tokenizer
@@ -206,7 +179,7 @@ def load_tokenizer():
 
 def load_model_for_stage(
     model: nn.Module, stage: int
-) -> tuple[MmLlamaMerge, Callable[[MmLlamaMerge], MmLlamaMerge]]:
+) -> tuple[MmLlamaForSequenceClassification, Callable[[MmLlamaForSequenceClassification], MmLlamaForSequenceClassification]]:
     if stage == 1:
         return _load_model_for_stage_1(model)
     elif stage == 2:
@@ -217,62 +190,48 @@ def load_model_for_stage(
         raise ValueError("Invalid stage number")
 
 
-def _load_model_for_stage_1(model: MmLlamaMerge):
+def _load_model_for_stage_1(model: MmLlamaForSequenceClassification):
     """Load model for stage 1 training (Projector training)"""
-
-    def execute_after_prepare(model: MmLlamaMerge):
-        model.freeze_encoder(train_norm=True)
-        return model
-
-    return model, execute_after_prepare
-
-
-def _load_model_for_stage_2(model: MmLlamaMerge):
-    model.load_state_dict(
-        torch.load(os.path.join(args.checkpoint_path, "best_model.pth")), strict=False
-    )
-    lora_config = LoraConfig(
-        r=args.lora_dim,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
-        target_modules=args.lora_module_name,
-        use_rslora=True,
-        bias="none",
-    )
-    model = model.apply_training_lora(lora_config)
-
-    def execute_after_prepare(model: MmLlamaMerge):
-        print("Freezing scaling and projector")
-        model.freeze_projector()
-        model.freeze_scaling()
-        return model
-
-    return model, execute_after_prepare
-
-
-def _load_model_for_stage_3(model: MmLlamaMerge):
-    model.load_state_dict(
-        torch.load(os.path.join(args.checkpoint_path, "best_model.pth")), strict=False
-    )
-
-    model = model.apply_training_lora(
-        adapter_id=args.checkpoint_path, resume_training=args.train_llm
-    )
-
-    def execute_after_prepare(model: MmLlamaMerge):
-        model.unfreeze_scaling()
-        model.freeze_projector()
+    model.ignore_acoustic = True
+    def execute_after_prepare(model: MmLlamaForSequenceClassification):
         model.freeze_encoder(train_norm=False)
         return model
 
     return model, execute_after_prepare
 
 
-def load_model_for_test(model: MmLlamaMerge):
+def _load_model_for_stage_2(model: MmLlamaForSequenceClassification):
+    model.load_state_dict(
+        torch.load(os.path.join(args.checkpoint_path, "best_model.pth")), strict=False
+    )
+    
+    model.ignore_text = True
+
+    def execute_after_prepare(model: MmLlamaForSequenceClassification):
+        model.freeze_encoder(train_norm=False)
+        return model
+
+    return model, execute_after_prepare
+
+def _load_model_for_stage_3(model: MmLlamaForSequenceClassification):
+    model.load_state_dict(
+        torch.load(os.path.join(args.checkpoint_path, "best_model.pth")), strict=False
+    )
+    
+    def execute_after_prepare(model: MmLlamaForSequenceClassification):
+        model.freeze_encoder(train_norm=False)
+        return model
+
+    return model, execute_after_prepare
+
+
+
+def load_model_for_test(model: MmLlamaForSequenceClassification):
     model.load_state_dict(
         torch.load(os.path.join(args.output_path, "best_model.pth")), strict=False
     )
     model = model.apply_inference_lora(args.output_path)
+
     return model.cuda()
 
 
@@ -281,7 +240,7 @@ def create_folder_if_not_exists(path):
         os.makedirs(path, exist_ok=True)
 
 
-def setup_config_and_processor():
+def setup_config_and_processor(dataset: ERCDataset):
     # Load configurations
     llm_config = AutoConfig.from_pretrained(args.llm_id)
     ac_config = AutoConfig.from_pretrained(args.acoustic_id)
@@ -293,16 +252,13 @@ def setup_config_and_processor():
     # setup of processor
     processor = MmLlamaProcessor(ac_processor, tokenizer)
 
-    ## setup of config
-    audio_start_token_id = tokenizer.additional_special_tokens_ids[0]
-    audio_end_token_id = tokenizer.additional_special_tokens_ids[1]
+    # setup of config
     config = MmLlamaConfig(
         llm_config=llm_config,
         audio_config=ac_config,
-        audio_token_id=audio_start_token_id,
-        audio_end_token_id=audio_end_token_id,
         pad_token_id=tokenizer.pad_token_id,
         llm_pretrained_adapter=args.adapter_id,
+        num_labels=len(dataset.emotions),
     )
 
     return tokenizer, processor, config
@@ -323,7 +279,6 @@ def train():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
     )
 
-    tokenizer, processor, config = setup_config_and_processor()
 
     ## setup datasets
     train_dataset = dataset_class(args.train_dataset)(
@@ -331,25 +286,28 @@ def train():
         mode="train",
         task=args.task,
         window=args.window_size,
-        audio_placement="enclose",
+        audio_placement="none",
     )
     eval_dataset = dataset_class(args.dev_dataset)(
         args.dev_dataset,
         mode="test",  # for iemocap
         task="normal",
         window=args.window_size,
-        audio_placement="enclose",
+        audio_placement="none",
     )
+
+    tokenizer, processor, config = setup_config_and_processor(train_dataset)
 
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=8,
-        collate_fn=SequenceGenerationCollator(processor, mode="train"),
+        collate_fn=SequenceClassificationCollator(processor, train_dataset),
     )
+
     # get model
-    model = MmLlamaMerge(config, train_llm=args.train_llm, alpha=args.alpha)
+    model = MmLlamaForSequenceClassification(config, train_llm=args.train_llm)
     model, execute_after_prepare = load_model_for_stage(model, args.stage)
 
     # setup optimizer
@@ -407,7 +365,7 @@ def train():
             try:
                 with accelerator.accumulate(model):
                     outputs = model(**batch)
-                    loss = outputs["loss"]
+                    loss = outputs.loss
                     running_loss += loss.item()
 
                     optimizer.zero_grad()
@@ -433,9 +391,9 @@ def train():
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=4,
-            collate_fn=SequenceGenerationCollator(
-                processor, mode="train"
-            ),  # mode=train because we test performance using loss,  not f1
+            collate_fn=SequenceClassificationCollator(
+                processor, eval_dataset
+            ),
             sampler=SequentialSampler(eval_dataset),
         )
 
@@ -495,47 +453,25 @@ def set_auxilary_changes(**kwargs):
         _set_stage_2_changes(**kwargs)
 
 
-def _set_stage_1_changes(model: MmLlamaMerge, epoch: int, **_):
+def _set_stage_1_changes(model: MmLlamaForSequenceClassification, epoch: int, **_):
     pass
 
 
-stage_2_wait_counter = 3
-
 
 def _set_stage_2_changes(
-    model: MmLlamaMerge,
+    model: MmLlamaForSequenceClassification,
     train_losses: list[float],
     eval_losses: list[float],
     epoch: int,
     **_,
 ):
-    window = 3
-
-    def mean_gradient(losses: list[float], window_size: int) -> float:
-        if len(losses) < window_size:
-            return 0.0
-        return np.mean(np.diff(losses[-window_size:]))
-
-    global stage_2_wait_counter
-    if stage_2_wait_counter > 0:
-        stage_2_wait_counter -= 1
-        return
-
-    train_gradient = mean_gradient(train_losses, window)
-    eval_gradient = mean_gradient(eval_losses, window)
-
-    if train_gradient < 0 and eval_gradient > 0.02:
-        stage_2_wait_counter = window
-        model.aux_scalar = 0.25 * (1 + math.cos(math.pi * (epoch / args.epochs) * 2))
-        print(
-            f"Setting aux_scalar to {model.aux_scalar}: input_embeds * {model.aux_scalar}, acoustic * {1 - model.aux_scalar}"
-        )
+    pass
 
 
 def save_model(accelerator: Accelerator, tokenizer, model):
     unwrapped_model = accelerator.unwrap_model(model)
     accelerator.save(
-        unwrapped_model.state_dict(modules=["projector", "alpha"]),
+        unwrapped_model.state_dict(modules=["projector"]),
         os.path.join(args.output_path, "best_model.pth"),
     )
 
@@ -593,50 +529,45 @@ def load_checkpoint(accelerator: Accelerator, model: MmLlama, checkpoint_path: s
 
 def prepare_batch(batch: dict[str, dict[str, torch.Tensor]]):
     for k in batch:
+        if type(batch[k]) is torch.Tensor:
+            batch[k] = batch[k].cuda()
+            continue
         for kk in batch[k]:
             batch[k][kk] = batch[k][kk].cuda()
+        
     return batch
 
 
 def test():
-    tokenizer, processor, config = setup_config_and_processor()
-
-    model = MmLlamaMerge(config)
-    model = load_model_for_test(model)
-
     ## setup datasets
     test_dataset = dataset_class(args.test_dataset)(
         args.test_dataset,
         mode="test",
-        audio_placement="enclose",
+        audio_placement="none",
         task="normal",
         window=args.window_size,
     )
+
+    tokenizer, processor, config = setup_config_and_processor(test_dataset)
 
     test_dataloader_f1 = DataLoader(
         test_dataset,
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=8,
-        collate_fn=SequenceGenerationCollator(processor, mode="dev"),
-    )
-    test_dataloader_loss = DataLoader(
-        test_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=8,
-        collate_fn=SequenceGenerationCollator(processor, mode="train"),
+        collate_fn=SequenceClassificationCollator(processor, test_dataset),
     )
 
-    f1 = evaluate_f1(tokenizer, model, test_dataloader_f1)
+    model = MmLlamaForSequenceClassification(config)
+    model = load_model_for_test(model)
+
+    f1, loss = evaluate_f1(tokenizer, model, test_dataloader_f1)
     print(f"F1 in Test: {f1}")
-
-    loss = evaluate_loss(model, test_dataloader_loss)
     print(f"Loss in Test: {loss}")
 
 
 def evaluate_train(
-    model: MmLlamaMerge,
+    model: MmLlamaForSequenceClassification,
     epoch: int,
     dataloader: DataLoader,
 ) -> float:
@@ -646,7 +577,7 @@ def evaluate_train(
     for step, batch in enumerate(eval_batch_iterator):
         with torch.no_grad():
             outputs = model(**batch)
-            loss = outputs["loss"]
+            loss = outputs.loss
             running_loss += loss.item()
     running_loss /= len(dataloader)
     print(f"Loss in Epoch {epoch}: {running_loss}")
@@ -655,41 +586,43 @@ def evaluate_train(
 
 def evaluate_f1(
     tokenizer: LlamaTokenizerFast,
-    model: MmLlamaMerge,
+    model: MmLlamaForSequenceClassification,
     dataloader: DataLoader,
 ):
     eval_batch_iterator = tqdm(dataloader, total=len(dataloader), desc="Evaluating")
     all_targets = []
     all_preds = []
     all_inputs = []
+    running_loss = 0.0
     model.eval()
-    for inputs, labels in eval_batch_iterator:
+    for inputs in eval_batch_iterator:
+        labels = inputs["labels"]
         with torch.no_grad():
             try:
                 inputs = prepare_batch(inputs)
-                preds = model.generate(**inputs)
+                preds = model(**inputs)
             except TimeoutError:
                 print("TimeoutError on input", inputs)
                 preds = torch.zeros((inputs["text"]["input_ids"].size(0), 1))
 
-        all_preds.extend(preds.cpu())
-        all_targets.extend(labels)
+        running_loss += preds.loss
+        all_preds.extend(preds.logits.cpu())
+        all_targets.extend(labels.cpu())
         all_inputs.extend(inputs["text"]["input_ids"].cpu())
 
+    running_loss /= len(dataloader)
     all_preds = all_preds[: len(dataloader.dataset)]
     all_targets = all_targets[: len(dataloader.dataset)]
     all_inputs = all_inputs[: len(dataloader.dataset)]
 
-    all_preds = tokenizer.batch_decode(all_preds, skip_special_tokens=True)
+    all_preds = torch.stack(all_preds).argmax(dim=-1).tolist()
     all_inputs = tokenizer.batch_decode(all_inputs, skip_special_tokens=True)
 
-    # clean predictions
-    def clean_pred(input: str, pred: str):
-        pred = pred.replace(input, "")
-        pred = pred.strip()
-        return pred
+    dataset = dataloader.dataset
+    all_preds = list(map(dataset.id2label, all_preds))
+    all_targets = list(map(dataset.id2label, all_targets))
 
-    all_preds = list(map(clean_pred, all_inputs, all_preds))
+
     f1 = f1_score(all_targets, all_preds, average="weighted")
     preds_for_eval = []
     for i, (inp, pred, target) in enumerate(zip(all_inputs, all_preds, all_targets)):
@@ -704,7 +637,7 @@ def evaluate_f1(
     with open(os.path.join(args.output_path, "preds_test.json"), "wt") as f:
         json.dump(preds_for_eval, f)
 
-    return f1
+    return f1, running_loss
 
 
 def evaluate_loss(
@@ -717,7 +650,7 @@ def evaluate_loss(
     for step, batch in enumerate(eval_batch_iterator):
         with torch.no_grad():
             outputs = model(**prepare_batch(batch))
-            loss = outputs["loss"]
+            loss = outputs.loss
             running_loss += loss.item()
     running_loss /= len(dataloader)
     return running_loss

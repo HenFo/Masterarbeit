@@ -1,6 +1,8 @@
-import torch
-from .processor import MmLlamaProcessor
 import numpy as np
+import torch
+
+from .dataset import ERCDataset
+from .processor import MmLlamaProcessor
 
 
 class DynamicPadCollator(object):
@@ -23,6 +25,42 @@ class DynamicPadCollator(object):
 
 
 class SequenceClassificationCollator(object):
+    def __init__(
+        self, processor: MmLlamaProcessor, dataset: ERCDataset, sample_rate=16000
+    ):
+        self.processor = processor
+        self.sample_rate = sample_rate
+        self.dataset = dataset
+
+    def __call__(self, batch):
+        acoustics = [a for (a, _), _ in batch]
+        texts = [t for (_, t), _ in batch]
+        labels = [self.dataset.label2id(l) for _, l in batch]
+
+        processed_inputs = self.processor(
+            text=texts,
+            acoustic=acoustics,
+            sampling_rate=self.sample_rate,
+            padding=True,
+            return_tensors="pt",
+        )
+
+        text_inputs, acoustic_inputs = (
+            processed_inputs["text"],
+            processed_inputs["acoustic"],
+        )
+
+        for k in acoustic_inputs:
+            acoustic_inputs[k] = torch.Tensor(np.asarray(acoustic_inputs[k]))
+
+        return {
+            "text": text_inputs,
+            "acoustic": acoustic_inputs,
+            "labels": torch.Tensor(labels).long(),
+        }
+
+
+class SequenceGenerationCollator(object):
     def __init__(self, processor: MmLlamaProcessor, mode="train", sample_rate=16000):
         assert mode in ["train", "dev"]
         self.mode = mode
@@ -40,12 +78,16 @@ class SequenceClassificationCollator(object):
         labels = [l for _, l in batch]
 
         processed_inputs = self.processor(
-            text=texts, acoustic=acoustics, sampling_rate=self.sample_rate, padding=True, return_tensors="pt"
+            text=texts,
+            acoustic=acoustics,
+            sampling_rate=self.sample_rate,
+            padding=True,
+            return_tensors="pt",
         )
 
         text_inputs, acoustic_inputs = (
             processed_inputs["text"],
-            processed_inputs["acoustic"]
+            processed_inputs["acoustic"],
         )
 
         for k in acoustic_inputs:
@@ -63,7 +105,10 @@ class SequenceClassificationCollator(object):
         labels = [l for _, l in batch]
 
         processed_inputs = self.processor(
-            text=texts, acoustic=acoustics, sampling_rate=self.sample_rate, return_tensors=None
+            text=texts,
+            acoustic=acoustics,
+            sampling_rate=self.sample_rate,
+            return_tensors=None,
         )
         processed_labels = self.processor(
             text=labels, tokenizer_args={"add_special_tokens": False}
@@ -74,7 +119,6 @@ class SequenceClassificationCollator(object):
             processed_inputs["acoustic"],
             processed_labels["text"],
         )
-
 
         # merge text with label
         all_input_ids = []

@@ -146,6 +146,9 @@ class MeldAudioDataset(Dataset):
 
 
 class ERCDataset(Dataset, ABC):
+    emotions: list[str]
+    speaker: list[str]
+    
     def __init__(
         self,
         dataset_path: str,
@@ -160,7 +163,7 @@ class ERCDataset(Dataset, ABC):
     ):
         assert mode in ["train", "dev", "test"]
         assert task in ["normal", "speaker", "emotion", "mixed"]
-        assert audio_placement in ["target", "front", "enclose"]
+        assert audio_placement in ["target", "front", "enclose", "none"]
         self.mode = mode
         self.dataset_path = dataset_path
         self.target_sample_rate = target_sample_rate
@@ -199,6 +202,12 @@ class ERCDataset(Dataset, ABC):
             text = self._generate_speaker_ident_task(history)
 
         return (audio, text["input"]), text["target"]
+
+    def label2id(self, label) -> int:
+        return self.emotions.index(label)
+
+    def id2label(self, id) -> str:
+        return self.emotions[id]
 
     def _get_normal_input(self, history):
         corrupt = self._check_audio_corruption(history.iloc[-1].name)
@@ -268,7 +277,7 @@ class ERCDataset(Dataset, ABC):
         prompts = dialog["Speaker"] + ': "' + dialog["Utterance"] + '"'
         dialog_chain = " \t ".join(prompts.iloc[:-1])
         target = dialog.iloc[-1]
-        instruction = f"Please select the Speaker label of the next utterance <Speaker: {target['Utterance']}> from <{self.speaker}>:"
+        instruction = f"Please select the Speaker label of the next utterance <Speaker: {target['Utterance']}> from <{', '.join(self.speaker)}>:"
         prompt = f"Now you are expert of sentiment and emotional analysis. The following conversation noted between '### ###' involves several speaker. ### {dialog_chain} ### {instruction}"
         return {"input": prompt, "target": target["Speaker"]}
 
@@ -277,7 +286,7 @@ class ERCDataset(Dataset, ABC):
             prompts = dialog["Speaker"] + ': "' + dialog["Utterance"] + '"'
             dialog_chain = " \t ".join(prompts.iloc[:-1])
             target = dialog.iloc[-1]
-            instruction = f"Based on the above historical utterances, next utterance is spoken by <{target['Speaker']}>, please predict the emotion states of <{target['Speaker']}> from <{self.emotions}>:"
+            instruction = f"Based on the above historical utterances, next utterance is spoken by <{target['Speaker']}>, please predict the emotion states of <{target['Speaker']}> from <{', '.join(self.emotions)}>:"
             prompt = f"Now you are expert of sentiment and emotional analysis. The following conversation noted between '### ###' involves several speaker. ### {dialog_chain} ### {instruction}"
             return {"input": prompt, "target": target["Emotion"]}
 
@@ -301,13 +310,17 @@ class ERCDataset(Dataset, ABC):
         if include_text:
             if self.audio_placement == "enclose":
                 target_utterance = f"<audio> {target['Utterance']} </audio>"
-                instruction += f"\"{target_utterance}\""
+                instruction += f'"{target_utterance}"'
                 idx = dialog_chain.rfind(target["Utterance"])
-                dialog_chain = dialog_chain[:idx] + target_utterance + dialog_chain[idx + len(target["Utterance"]):]
+                dialog_chain = (
+                    dialog_chain[:idx]
+                    + target_utterance
+                    + dialog_chain[idx + len(target["Utterance"]) :]
+                )
             else:
                 instruction += f"\"{target['Utterance']}\""
 
-        instruction += f"> from <{self.emotions}>:"
+        instruction += f"> from <{', '.join(self.emotions)}>:"
 
         prompt = f"Now you are expert of sentiment and emotional analysis. The following conversation noted between '### ###' involves several speaker. ### {dialog_chain} ### {instruction}"
         return {"input": prompt, "target": target["Emotion"]}
@@ -337,8 +350,25 @@ class MeldDataset(ERCDataset):
             include_audio_percentage,
             include_target_text_percentage,
         )
-        self.emotions = "surprise, anger, neutral, joy, sadness, fear, disgust"
-        self.speaker = "Speaker_0, Speaker_1, Speaker_2, Speaker_3, Speaker_4, Speaker_5, Speaker_6, Speaker_7"
+        self.emotions = [
+            "surprise",
+            "anger",
+            "neutral",
+            "joy",
+            "sadness",
+            "fear",
+            "disgust",
+        ]
+        self.speaker = [
+            "Speaker_0",
+            "Speaker_1",
+            "Speaker_2",
+            "Speaker_3",
+            "Speaker_4",
+            "Speaker_5",
+            "Speaker_6",
+            "Speaker_7",
+        ]
 
     def _prepare_dataset(self, path) -> pd.DataFrame:
         ds = pd.read_csv(path, index_col=0).reset_index(drop=True)
@@ -372,8 +402,8 @@ class IemocapDataset(ERCDataset):
         include_audio_percentage: float = 1.0,
         include_target_text_percentage: float = 1.0,
     ):
-        self.emotions = "neutral, angry, frustrated, happy, excited, sad"
-        self.speaker = "Speaker_0, Speaker_1"
+        self.emotions = ["neutral", "angry", "frustrated", "happy", "excited", "sad"]
+        self.speaker = ["Speaker_0", "Speaker_1"]
         super().__init__(
             dataset_path,
             mode,
@@ -387,7 +417,7 @@ class IemocapDataset(ERCDataset):
         )
 
         self.filtered_dataset = self.dataset[
-            self.dataset["Emotion"].isin(self.emotions.split(", "))
+            self.dataset["Emotion"].isin(self.emotions)
         ]
         indices = self.dataset.index[
             self.dataset.isin(self.filtered_dataset).all(axis=1)
@@ -413,7 +443,7 @@ class IemocapDataset(ERCDataset):
         ds = pd.read_csv(path)
         split = pd.read_csv(os.path.join(os.path.dirname(path), "iemocap_split.csv"))
         ds = pd.merge(ds, split, on="Dialogue_ID")
-        ds["Emotion"] = ds["Emotion"].map(label_mapping)
+        ds["Emotion"] = ds["Emotion"].map(label_mapping).astype(str)
         ds = ds[ds["Split"] == self.mode]
         ds = (
             ds.groupby("Dialogue_ID")
@@ -430,7 +460,7 @@ if __name__ == "__main__":
     PATH = "/home/fock/code/MultiModalInstructERC/datasets/iemocap/iemocap.csv"
     # tasks = ["normal", "speaker", "emotion", "mixed"]
     ds = IemocapDataset(
-        PATH, mode="test", window=3, task="normal", audio_placement="enclose"
+        PATH, mode="test", window=3, task="normal", audio_placement="none"
     )
 
     x = ds[3]

@@ -22,7 +22,7 @@ from utils import (
     MmLlamaConcat,
     MmLlamaConfig,
     MmLlamaProcessor,
-    SequenceClassificationCollator,
+    SequenceGenerationCollator,
 )
 from peft import LoraConfig, get_peft_model, PeftModel
 import torch.nn as nn
@@ -277,7 +277,7 @@ def train():
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=8,
-        collate_fn=SequenceClassificationCollator(processor, mode="train"),
+        collate_fn=SequenceGenerationCollator(processor, mode="train"),
     )
     # get model
     model = MmLlamaConcat(config, train_llm=args.train_llm)
@@ -338,7 +338,7 @@ def train():
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=4,
-            collate_fn=SequenceClassificationCollator(processor, mode="train"),
+            collate_fn=SequenceGenerationCollator(processor, mode="train"),
             sampler=SequentialSampler(eval_dataset),
         )
 
@@ -449,7 +449,7 @@ def test():
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=8,
-        collate_fn=SequenceClassificationCollator(processor, mode="dev"),
+        collate_fn=SequenceGenerationCollator(processor, mode="dev"),
     )
     # get model
     evaluate_f1(tokenizer, model, test_dataloader)
