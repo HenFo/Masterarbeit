@@ -307,7 +307,7 @@ def train():
     )
 
     # get model
-    model = MmLlamaForSequenceClassification(config, train_llm=args.train_llm)
+    model = MmLlamaForSequenceClassification(config)
     model, execute_after_prepare = load_model_for_stage(model, args.stage)
 
     # setup optimizer
@@ -471,13 +471,9 @@ def _set_stage_2_changes(
 def save_model(accelerator: Accelerator, tokenizer, model):
     unwrapped_model = accelerator.unwrap_model(model)
     accelerator.save(
-        unwrapped_model.state_dict(modules=["projector"]),
+        unwrapped_model.state_dict(exclude=["llama", "wave2vec2"]),
         os.path.join(args.output_path, "best_model.pth"),
     )
-
-    if args.train_llm:
-        model.save_pretrained(args.output_path)
-    tokenizer.save_pretrained(args.output_path)
 
 
 def save_checkpoint(
@@ -501,17 +497,11 @@ def save_checkpoint(
             },
             os.path.join(checkpoint_path, "checkpoint_metadata.bin"),
         )
-        if args.train_llm:
-            model.save_pretrained(checkpoint_path)
 
 
 def load_checkpoint(accelerator: Accelerator, model: MmLlama, checkpoint_path: str):
     accelerator.load_state(checkpoint_path, load_module_strict=False)
     checkpoint = torch.load(os.path.join(checkpoint_path, "checkpoint_metadata.bin"))
-    if args.train_llm:
-        model = accelerator.unwrap_model(model)
-        model.apply_training_lora(adapter_id=checkpoint_path, resume_training=True)
-        model = accelerator.prepare_model(model)
 
     epoch = checkpoint["epoch"]
     best_eval_loss = checkpoint["best_eval_loss"]

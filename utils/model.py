@@ -212,14 +212,17 @@ class MmLlama(nn.Module, ABC):
             inputs_embeds=inputs_embeds, attention_mask=attention_mask, **kwargs
         )
 
-    def state_dict(self, modules: list[str] | str | None = None, *args, **kwargs):
+    def state_dict(self, modules: list[str] | str | None = None, exclude: list[str] | str | None = None, *args, **kwargs):
         state_dict = super().state_dict(*args, **kwargs)
-        if modules:
-
+        if modules or exclude:
             def check_module(state_dict_module_name: str):
-                return any([module in state_dict_module_name for module in modules])
+                if modules:
+                    return any([module in state_dict_module_name for module in modules])
+                else:
+                    return not any([module in state_dict_module_name for module in exclude])
 
             state_dict = {k: v for k, v in state_dict.items() if check_module(k)}
+        
         return state_dict
 
     def apply_training_lora(
@@ -635,7 +638,13 @@ class MmLlamaForSequenceClassification(MmLlama):
         self.text_projection_size = 128
         self.audio_projection_size = 128
         self.projector = LateFusionProjector(config, self.text_projection_size, self.audio_projection_size)
-        self.classifier = nn.Linear(128*2, config.num_labels)
+        hidden_size = self.audio_projection_size + self.text_projection_size
+        
+        self.hidden = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.classifier = nn.Linear(hidden_size, config.num_labels, bias=False)
+        self.dropout = nn.Dropout(0.2)
+        self.norm = LlamaRMSNorm(hidden_size)
+        self.ac = nn.SiLU()
 
         self.ignore_acoustic = False
         self.ignore_text = False
@@ -649,7 +658,7 @@ class MmLlamaForSequenceClassification(MmLlama):
         labels: torch.LongTensor | None = None,
         **kwargs,
     ):
-        llm_outputs = self.llama(**text, **kwargs, output_hidden_states=True).hidden_states[-1]
+        llm_outputs = self.llama(**text, **kwargs, output_hidden_states=True).hidden_states[-1].detach()
         audio_outputs = self.wave2vec2(**acoustic).last_hidden_state.detach()
 
         # assume left padding
@@ -663,7 +672,8 @@ class MmLlamaForSequenceClassification(MmLlama):
         if self.ignore_acoustic:
             merged[:, self.text_projection_size:] = 0
 
-        logits = self.classifier(merged)
+        merged = self.norm(self.ac(self.hidden(merged)))
+        logits = self.classifier(self.dropout(merged))
 
         loss = None
         if labels is not None:

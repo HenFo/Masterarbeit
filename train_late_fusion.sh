@@ -9,7 +9,7 @@ WINDOW=12
 dataset="iemocap"
 model="LLaMA2-base"
 
-experiment="mlp/late_fusion/$dataset/$model/text_only"
+experiment="late_fusion/$dataset/$model/mlp"
 
 LANGUAGE_MODEL="/home/fock/code/MultiModalInstructERC/models/language/$model"
 LORA_ADAPTER="/home/fock/code/MultiModalInstructERC/models/language/adapter/$dataset/$model"
