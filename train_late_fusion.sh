@@ -1,6 +1,9 @@
 #!/bin/bash
 
-TEST_ONLY=False
+TRAIN=True
+TEST=True
+ABLATION=True
+
 
 WINDOW=12
 
@@ -39,7 +42,7 @@ stage_3_path=$OUTPUT_PATH"stage_3/"
 
 output_path=$stage_1_path
 
-if [ $TEST_ONLY = False ]; then
+if [ $TRAIN = True ]; then
     echo "Running stage 1"
     accelerate launch ./run_scripts/main_late_fusion.py \
         --batch_size 8 \
@@ -69,8 +72,6 @@ if [ $TEST_ONLY = False ]; then
 
     output_path=$stage_1_path
 
-    cp $stage_1_path"best_model.pth" $stage_2_path
-
     echo "Running stage 2"
     accelerate launch ./run_scripts/main_late_fusion.py \
         --batch_size 8 \
@@ -97,10 +98,7 @@ if [ $TEST_ONLY = False ]; then
         exit 1
     fi
 
-    output_path=$stage_2_path
-
-    cp $stage_2_path"best_model.pth" $stage_3_path
-    
+    output_path=$stage_2_path    
     
     echo "Running stage 3"
     accelerate launch ./run_scripts/main_late_fusion.py \
@@ -116,7 +114,7 @@ if [ $TEST_ONLY = False ]; then
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
         --epochs 15 \
-        --lr 1e-5 \
+        --lr 2e-5 \
         --min_lr_ratio 0.2 \
         --warmup_ratio 0.1 \
         --weight_decay 0.0 \
@@ -133,15 +131,49 @@ if [ $TEST_ONLY = False ]; then
 
 fi
 
-echo "Running evaluation"
-python run_scripts/main_late_fusion.py \
-    --evaluation \
-    --llm_id $LANGUAGE_MODEL \
-    --acoustic_id $ACOUSTIC_MODEL \
-    --adapter_id $LORA_ADAPTER \
-    --output_path $output_path \
-    --test_dataset $DS_TEST_PATH \
-    --dev_dataset $DS_DEV_PATH \
-    --window_size $WINDOW \
-    --batch_size 8
+if [ $TEST = True ]; then
 
+    echo "Running evaluation"
+    python run_scripts/main_late_fusion.py \
+        --evaluation \
+        --llm_id $LANGUAGE_MODEL \
+        --acoustic_id $ACOUSTIC_MODEL \
+        --adapter_id $LORA_ADAPTER \
+        --output_path $output_path \
+        --test_dataset $DS_TEST_PATH \
+        --dev_dataset $DS_DEV_PATH \
+        --window_size $WINDOW \
+        --batch_size 8
+
+fi
+
+if [ $ABLATION = True ]; then
+
+    output_path=$stage_3_path
+
+    echo "Running ablation"
+    python run_scripts/main_late_fusion.py \
+        --evaluation \
+        --llm_id $LANGUAGE_MODEL \
+        --acoustic_id $ACOUSTIC_MODEL \
+        --adapter_id $LORA_ADAPTER \
+        --output_path $output_path \
+        --test_dataset $DS_TEST_PATH \
+        --dev_dataset $DS_DEV_PATH \
+        --window_size $WINDOW \
+        --batch_size 8 \
+        --ignore_audio
+
+    python run_scripts/main_late_fusion.py \
+        --evaluation \
+        --llm_id $LANGUAGE_MODEL \
+        --acoustic_id $ACOUSTIC_MODEL \
+        --adapter_id $LORA_ADAPTER \
+        --output_path $output_path \
+        --test_dataset $DS_TEST_PATH \
+        --dev_dataset $DS_DEV_PATH \
+        --window_size $WINDOW \
+        --batch_size 8 \
+        --ignore_text
+
+fi

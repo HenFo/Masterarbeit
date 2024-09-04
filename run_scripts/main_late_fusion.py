@@ -65,17 +65,14 @@ class Args:
     warmup_ratio: float = 0.1
     min_lr_ratio: float = 0.0
     weight_decay: float = 0
-    train_llm: bool = False
-    lora_dim: int = 16
-    lora_alpha: int = 32
-    lora_dropout: float = 0.1
-    lora_module_name: str = ".*?llama.*?[qkvo]_proj"
     resume_training: bool = False
     window_size: int = 5
     time_till_aux: int = epochs
     do_auxilary_task: bool = False
     alpha: float = 1.0
     seed: int = 42
+    ignore_text: bool = False
+    ignore_audio: bool = False
 
 
 def parse_args():
@@ -101,15 +98,11 @@ def parse_args():
     parser.add_argument("--warmup_ratio", type=float, default=0.1)
     parser.add_argument("--min_lr_ratio", type=float, default=0.0)
     parser.add_argument("--weight_decay", type=float, default=0)
-    parser.add_argument("--train_llm", action="store_true")
-    parser.add_argument("--lora_dim", type=int, default=16)
-    parser.add_argument("--lora_alpha", type=int, default=32)
-    parser.add_argument("--lora_dropout", type=float, default=0.1)
-    parser.add_argument("--lora_module_name", type=str, default=".*?[qkvo]_proj")
     parser.add_argument("--resume_training", action="store_true")
     parser.add_argument("--time_till_aux", type=int, default=15)
     parser.add_argument("--do_auxilary_task", action="store_true")
-    parser.add_argument("--alpha", type=float, default=1.0)
+    parser.add_argument("--ignore_text", action="store_true")
+    parser.add_argument("--ignore_audio", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
     return Args(**vars(args))
@@ -191,8 +184,9 @@ def load_model_for_stage(
 
 
 def _load_model_for_stage_1(model: MmLlamaForSequenceClassification):
-    """Load model for stage 1 training (Projector training)"""
+    
     model.ignore_acoustic = True
+
     def execute_after_prepare(model: MmLlamaForSequenceClassification):
         model.freeze_encoder(train_norm=False)
         return model
@@ -230,7 +224,9 @@ def load_model_for_test(model: MmLlamaForSequenceClassification):
     model.load_state_dict(
         torch.load(os.path.join(args.output_path, "best_model.pth")), strict=False
     )
-    model = model.apply_inference_lora(args.output_path)
+
+    model.ignore_text = args.ignore_text
+    model.ignore_acoustic = args.ignore_audio
 
     return model.cuda()
 
@@ -624,7 +620,8 @@ def evaluate_f1(
                 "target": target,
             }
         )
-    with open(os.path.join(args.output_path, "preds_test.json"), "wt") as f:
+    suffix = "_no_audio" if args.ignore_audio else "_no_text" if args.ignore_text else ""
+    with open(os.path.join(args.output_path, f"preds_test{suffix}.json"), "wt") as f:
         json.dump(preds_for_eval, f)
 
     return f1, running_loss
