@@ -13,6 +13,7 @@ from transformers.models.wav2vec2.modeling_wav2vec2 import (
     Wav2Vec2PreTrainedModel,
 )
 from transformers.models.llama.modeling_llama import LlamaRMSNorm
+from pytorch_metric_learning import losses
 
 
 class ClassificationHead(nn.Module):
@@ -633,12 +634,13 @@ class LateFusionProjector(nn.Module):
         return normed
 
 class MmLlamaForSequenceClassification(MmLlama):
-    def __init__(self, config: MmLlamaConfig, **kwargs):
+    def __init__(self, config: MmLlamaConfig, with_contrastive: bool = True, **kwargs):
         super(MmLlamaForSequenceClassification, self).__init__(config, **kwargs)
         self.text_projection_size = 128
         self.audio_projection_size = 128
         self.projector = LateFusionProjector(config, self.text_projection_size, self.audio_projection_size)
         hidden_size = self.audio_projection_size + self.text_projection_size
+        self.with_contrastive = with_contrastive
         
         self.hidden = nn.Linear(hidden_size, hidden_size, bias=False)
         self.classifier = nn.Linear(hidden_size, config.num_labels, bias=False)
@@ -679,6 +681,11 @@ class MmLlamaForSequenceClassification(MmLlama):
         if labels is not None:
             loss_fct = nn.CrossEntropyLoss()
             loss = loss_fct(logits.view(-1, self.config.num_labels), labels.view(-1))
+
+        if self.with_contrastive:
+            contrastive_loss = losses.NTXentLoss()
+            loss = loss + contrastive_loss(merged, labels.view(-1)) * 0.1
+
 
         return SequenceClassifierOutput(logits=logits, loss=loss)
 
