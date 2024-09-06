@@ -185,7 +185,8 @@ def load_model_for_stage(
 
 def _load_model_for_stage_1(model: MmLlamaForSequenceClassification):
     
-    model.ignore_acoustic = True
+    model.ignore_text = True
+    model.use_gate = False
 
     def execute_after_prepare(model: MmLlamaForSequenceClassification):
         model.freeze_encoder(train_norm=False)
@@ -198,8 +199,6 @@ def _load_model_for_stage_2(model: MmLlamaForSequenceClassification):
     model.load_state_dict(
         torch.load(os.path.join(args.checkpoint_path, "best_model.pth")), strict=False
     )
-    
-    model.ignore_text = True
 
     def execute_after_prepare(model: MmLlamaForSequenceClassification):
         model.freeze_encoder(train_norm=False)
@@ -597,11 +596,12 @@ def evaluate_f1(
         all_inputs.extend(inputs["text"]["input_ids"].cpu())
 
     running_loss /= len(dataloader)
-    all_preds = all_preds[: len(dataloader.dataset)]
+    all_preds = torch.stack(all_preds[: len(dataloader.dataset)])
     all_targets = all_targets[: len(dataloader.dataset)]
     all_inputs = all_inputs[: len(dataloader.dataset)]
 
-    all_preds = torch.stack(all_preds).argmax(dim=-1).tolist()
+    all_preds_cert = torch.softmax(all_preds, dim=-1).max(dim=-1).values.tolist()
+    all_preds = all_preds.argmax(dim=-1).tolist()
     all_inputs = tokenizer.batch_decode(all_inputs, skip_special_tokens=True)
 
     dataset = dataloader.dataset
@@ -611,13 +611,14 @@ def evaluate_f1(
 
     f1 = f1_score(all_targets, all_preds, average="weighted")
     preds_for_eval = []
-    for i, (inp, pred, target) in enumerate(zip(all_inputs, all_preds, all_targets)):
+    for i, (inp, pred, target, cert) in enumerate(zip(all_inputs, all_preds, all_targets, all_preds_cert)):
         preds_for_eval.append(
             {
                 "index": i,
                 "input": inp,
                 "output": pred,
                 "target": target,
+                "certainty": cert
             }
         )
     suffix = "_no_audio" if args.ignore_audio else "_no_text" if args.ignore_text else ""

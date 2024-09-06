@@ -623,33 +623,58 @@ class LateFusionProjector(nn.Module):
         super(LateFusionProjector, self).__init__()
         self.text_down_projector = nn.Linear(config.llm_config.hidden_size, text_out, bias=True)
         self.audio_down_projector = nn.Linear(config.audio_config.hidden_size, audio_out, bias=True)
-        self.norm = LlamaRMSNorm(text_out + audio_out)
+        self.norm = LlamaRMSNorm(text_out)
         self.ac = nn.SiLU()
     
 
-    def forward(self, text: torch.Tensor, audio: torch.Tensor):
-        text_down = self.text_down_projector(text)
-        audio_down = self.audio_down_projector(audio)
-        normed = self.norm(self.ac(torch.cat([text_down, audio_down], dim=-1)))
+    def forward(self, text: torch.Tensor, audio: torch.Tensor, alpha: float = 0.5):
+        text_down = self.ac(self.text_down_projector(text)) * (1 - alpha)
+        audio_down = self.ac(self.audio_down_projector(audio)) * alpha
+
+        normed = self.norm(text_down + audio_down)
         return normed
+    
+class GatingLayer(nn.Module):
+    def __init__(self, config: MmLlamaConfig):
+        super(GatingLayer, self).__init__()
+        hidden_size = 128
+        self.down_projector = nn.Linear(config.llm_config.hidden_size, hidden_size)
+        self.mha = nn.MultiheadAttention(
+            hidden_size, 4, batch_first=True
+        )
+        self.gate = nn.Linear(hidden_size, 1)
+    
+    def forward(self, text: torch.Tensor):
+        text_down = self.down_projector(text)
+        att, _ = self.mha(text_down, text_down, text_down)
+        att = torch.mean(att, dim=1)
+        gate = torch.sigmoid(self.gate(att))
+        return gate
+
+
 
 class MmLlamaForSequenceClassification(MmLlama):
-    def __init__(self, config: MmLlamaConfig, with_contrastive: bool = True, **kwargs):
+    def __init__(self, config: MmLlamaConfig, with_contrastive: bool = False, **kwargs):
         super(MmLlamaForSequenceClassification, self).__init__(config, **kwargs)
         self.text_projection_size = 128
         self.audio_projection_size = 128
         self.projector = LateFusionProjector(config, self.text_projection_size, self.audio_projection_size)
-        hidden_size = self.audio_projection_size + self.text_projection_size
+        self.gate = GatingLayer(config)
+
+        self.hidden_size = self.audio_projection_size #+ self.text_projection_size
+
         self.with_contrastive = with_contrastive
         
-        self.hidden = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.classifier = nn.Linear(hidden_size, config.num_labels, bias=False)
-        self.dropout = nn.Dropout(0.2)
-        self.norm = LlamaRMSNorm(hidden_size)
-        self.ac = nn.SiLU()
+        # self.hidden = nn.Linear(self.hidden_size, self.hidden_size, bias=False)
+        self.classifier = nn.Linear(self.hidden_size, config.num_labels, bias=False)
+        self.dropout = nn.Dropout(0.3)
+        # self.norm = LlamaRMSNorm(self.hidden_size)
+        # self.ac = nn.SiLU()
 
         self.ignore_acoustic = False
         self.ignore_text = False
+
+        self.use_gate = True
 
 
     @torch.autocast(device_type="cuda")
@@ -663,24 +688,28 @@ class MmLlamaForSequenceClassification(MmLlama):
         llm_outputs = self.llama(**text, **kwargs, output_hidden_states=True).hidden_states[-1].detach()
         audio_outputs = self.wave2vec2(**acoustic).last_hidden_state.detach()
 
+        if not (self.ignore_acoustic or self.ignore_text) and self.use_gate:
+            alpha = self.gate(llm_outputs)
+        else:
+            if self.ignore_acoustic:
+                audio_outputs = torch.zeros_like(audio_outputs, device=audio_outputs.device)
+            if self.ignore_text:
+                llm_outputs = torch.zeros_like(llm_outputs, device=llm_outputs.device)
+
+            alpha = torch.tensor(0.5, device=llm_outputs.device)
+
         # assume left padding
         pooled_text = llm_outputs[:, -1]
         pooled_audio = torch.mean(audio_outputs, dim=1)
-        merged = self.projector(pooled_text, pooled_audio)
+        merged = self.projector(pooled_text, pooled_audio, alpha)
 
-        if self.ignore_text:
-            merged[:, :self.text_projection_size] = 0
-
-        if self.ignore_acoustic:
-            merged[:, self.text_projection_size:] = 0
-
-        merged = self.norm(self.ac(self.hidden(merged)))
+        # merged = self.norm(self.ac(self.hidden(merged)))
         logits = self.classifier(self.dropout(merged))
 
-        loss = None
+        loss = torch.tensor(0.0)
         if labels is not None:
             loss_fct = nn.CrossEntropyLoss()
-            loss = loss_fct(logits.view(-1, self.config.num_labels), labels.view(-1))
+            loss = loss + loss_fct(logits.view(-1, self.config.num_labels), labels.view(-1))
 
         if self.with_contrastive:
             contrastive_loss = losses.NTXentLoss()
@@ -688,6 +717,7 @@ class MmLlamaForSequenceClassification(MmLlama):
 
 
         return SequenceClassifierOutput(logits=logits, loss=loss)
+    
 
 
 @dataclass
