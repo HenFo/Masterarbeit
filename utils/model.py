@@ -633,49 +633,69 @@ class LateFusionProjector(nn.Module):
 
         normed = self.norm(text_down + audio_down)
         return normed
-    
-class GatingLayer(nn.Module):
-    def __init__(self, config: MmLlamaConfig):
-        super(GatingLayer, self).__init__()
-        hidden_size = 128
-        self.down_projector = nn.Linear(config.llm_config.hidden_size, hidden_size)
-        self.mha = nn.MultiheadAttention(
-            hidden_size, 4, batch_first=True
-        )
-        self.gate = nn.Linear(hidden_size, 1)
-    
-    def forward(self, text: torch.Tensor):
-        text_down = self.down_projector(text)
-        att, _ = self.mha(text_down, text_down, text_down)
-        att = torch.mean(att, dim=1)
-        gate = torch.sigmoid(self.gate(att))
-        return gate
 
+
+class GatingLayer(nn.Module):
+    def __init__(self, text_dim: int, audio_dim: int):
+        super(GatingLayer, self).__init__()
+        hidden_size = text_dim + audio_dim
+        self.hidden = nn.Linear(hidden_size, hidden_size)
+        self.ac = nn.SiLU()
+        self.fc = nn.Linear(hidden_size, 2)
+        self.dropout = nn.Dropout(0.3)
+
+    def forward(self, text: torch.Tensor, audio: torch.Tensor):
+        gated = self.ac(self.hidden(self.dropout(torch.cat([text, audio], dim=-1))))
+        return self.fc(self.dropout(gated))
+
+
+class ModalityProjector(nn.Module):
+    def __init__(self, config: MmLlamaConfig, in_dim: int, out_dim: int):
+        super(ModalityProjector, self).__init__()
+        self.down = nn.Linear(in_dim, out_dim)
+        self.classifier = nn.Linear(out_dim, config.num_labels, bias=False)
+        self.norm = LlamaRMSNorm(out_dim)
+        self.ac = nn.SiLU()
+        self.dropout = nn.Dropout(0.3)
+
+    def forward(self, x: torch.Tensor, labels: torch.Tensor | None = None):
+        main_path = self.ac(self.norm(self.down(x)))
+        cls_path = self.classifier(self.dropout(main_path))
+        loss = None
+        if labels is not None:
+            loss_fn = nn.CrossEntropyLoss(reduction="none")
+            loss = loss_fn(cls_path, labels)
+
+        return main_path, cls_path, loss
 
 
 class MmLlamaForSequenceClassification(MmLlama):
-    def __init__(self, config: MmLlamaConfig, with_contrastive: bool = False, **kwargs):
+    def __init__(self, config: MmLlamaConfig, **kwargs):
         super(MmLlamaForSequenceClassification, self).__init__(config, **kwargs)
-        self.text_projection_size = 128
-        self.audio_projection_size = 128
-        self.projector = LateFusionProjector(config, self.text_projection_size, self.audio_projection_size)
-        self.gate = GatingLayer(config)
+        self.output_projection_size = 128
+        # self.projector = LateFusionProjector(config, self.text_projection_size, self.audio_projection_size)
+        # self.gate = GatingLayer(config)
+        self.text_projector = ModalityProjector(
+            config, config.llm_config.hidden_size, self.output_projection_size
+        )
+        self.audio_projector = ModalityProjector(
+            config, config.audio_config.hidden_size, self.output_projection_size
+        )
 
-        self.hidden_size = self.audio_projection_size #+ self.text_projection_size
+        self.gate = GatingLayer(
+            self.output_projection_size, self.output_projection_size
+        )
 
-        self.with_contrastive = with_contrastive
-        
-        # self.hidden = nn.Linear(self.hidden_size, self.hidden_size, bias=False)
-        self.classifier = nn.Linear(self.hidden_size, config.num_labels, bias=False)
+        self.classifier = nn.Linear(
+            self.output_projection_size, config.num_labels, bias=False
+        )
         self.dropout = nn.Dropout(0.3)
-        # self.norm = LlamaRMSNorm(self.hidden_size)
-        # self.ac = nn.SiLU()
+        self.norm = LlamaRMSNorm(self.output_projection_size)
 
         self.ignore_acoustic = False
         self.ignore_text = False
 
         self.use_gate = True
-
 
     @torch.autocast(device_type="cuda")
     def forward(
@@ -685,39 +705,59 @@ class MmLlamaForSequenceClassification(MmLlama):
         labels: torch.LongTensor | None = None,
         **kwargs,
     ):
-        llm_outputs = self.llama(**text, **kwargs, output_hidden_states=True).hidden_states[-1].detach()
+        llm_outputs = (
+            self.llama(**text, **kwargs, output_hidden_states=True)
+            .hidden_states[-1]
+            .detach()
+        )
         audio_outputs = self.wave2vec2(**acoustic).last_hidden_state.detach()
-
-        if not (self.ignore_acoustic or self.ignore_text) and self.use_gate:
-            alpha = self.gate(llm_outputs)
-        else:
-            if self.ignore_acoustic:
-                audio_outputs = torch.zeros_like(audio_outputs, device=audio_outputs.device)
-            if self.ignore_text:
-                llm_outputs = torch.zeros_like(llm_outputs, device=llm_outputs.device)
-
-            alpha = torch.tensor(0.5, device=llm_outputs.device)
 
         # assume left padding
         pooled_text = llm_outputs[:, -1]
         pooled_audio = torch.mean(audio_outputs, dim=1)
-        merged = self.projector(pooled_text, pooled_audio, alpha)
 
-        # merged = self.norm(self.ac(self.hidden(merged)))
-        logits = self.classifier(self.dropout(merged))
+        text_down, text_pred, text_loss = self.text_projector(pooled_text, labels)
+        audio_down, audio_pred, audio_loss = self.audio_projector(pooled_audio, labels)
 
-        loss = torch.tensor(0.0)
-        if labels is not None:
-            loss_fct = nn.CrossEntropyLoss()
-            loss = loss + loss_fct(logits.view(-1, self.config.num_labels), labels.view(-1))
+        gate = self.gate(text_down.detach(), audio_down.detach())
+        gate_loss = None
+        if text_loss is not None and audio_loss is not None and labels is not None:
+            def get_labels(mod_pred:torch.Tensor):
+                preds = torch.argmax(mod_pred, dim=1)
+                return (preds == labels).float()
+            
+            gate_target = torch.stack([get_labels(text_pred), get_labels(audio_pred)], dim=1)
+            gate_loss = nn.BCEWithLogitsLoss()(gate, gate_target.detach())
 
-        if self.with_contrastive:
-            contrastive_loss = losses.NTXentLoss()
-            loss = loss + contrastive_loss(merged, labels.view(-1)) * 0.1
+
+        loss = None
+        main_loss = None
+        if self.ignore_text:
+            logits = audio_pred
+            loss = main_loss = audio_loss.mean()
+
+        elif self.ignore_acoustic:
+            logits = text_pred
+            loss = main_loss = text_loss.mean()
+
+        else:
+            gate = 1 - torch.softmax(gate.detach(), dim=1)
+            
+            merged = self.norm(text_down * gate[:, 0, None] + audio_down * gate[:, 1, None])
+            logits = self.classifier(self.dropout(merged))
+            if labels is not None:
+                loss_fct = nn.CrossEntropyLoss()
+                main_loss = loss_fct(
+                    logits.view(-1, self.config.num_labels), labels.view(-1)
+                )
+                loss = main_loss + (text_loss.mean() + audio_loss.mean()) * 0.1
+        
+        if gate_loss is not None:
+            loss = loss + gate_loss
+
+        return SequenceClassifierOutput(logits=logits, loss=loss, main_loss=main_loss, text_loss=text_loss, audio_loss=audio_loss, gate_loss=gate_loss)
 
 
-        return SequenceClassifierOutput(logits=logits, loss=loss)
-    
 
 
 @dataclass
@@ -726,3 +766,7 @@ class SequenceClassifierOutput:
     loss: torch.FloatTensor | None = None
     hidden_states: Tuple[torch.FloatTensor] | None = None
     attentions: Tuple[torch.FloatTensor] | None = None
+    text_loss: torch.FloatTensor | None = None
+    audio_loss: torch.FloatTensor | None = None
+    gate_loss: torch.FloatTensor | None = None
+    main_loss: torch.FloatTensor | None = None

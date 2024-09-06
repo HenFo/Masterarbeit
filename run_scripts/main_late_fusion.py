@@ -184,9 +184,7 @@ def load_model_for_stage(
 
 
 def _load_model_for_stage_1(model: MmLlamaForSequenceClassification):
-    
     model.ignore_text = True
-    model.use_gate = False
 
     def execute_after_prepare(model: MmLlamaForSequenceClassification):
         model.freeze_encoder(train_norm=False)
@@ -200,17 +198,23 @@ def _load_model_for_stage_2(model: MmLlamaForSequenceClassification):
         torch.load(os.path.join(args.checkpoint_path, "best_model.pth")), strict=False
     )
 
+    model.ignore_acoustic = True
+
     def execute_after_prepare(model: MmLlamaForSequenceClassification):
         model.freeze_encoder(train_norm=False)
         return model
 
     return model, execute_after_prepare
 
+
 def _load_model_for_stage_3(model: MmLlamaForSequenceClassification):
-    model.load_state_dict(
-        torch.load(os.path.join(args.checkpoint_path, "best_model.pth")), strict=False
-    )
-    
+    state_dict = torch.load(os.path.join(args.checkpoint_path, "best_model.pth"))
+    state_dict["classifier.weight"] = (
+        state_dict["text_projector.classifier.weight"]
+        + state_dict["audio_projector.classifier.weight"]
+    ) / 2
+    model.load_state_dict(state_dict, strict=False)
+
     def execute_after_prepare(model: MmLlamaForSequenceClassification):
         model.freeze_encoder(train_norm=False)
         return model
@@ -361,7 +365,8 @@ def train():
                 with accelerator.accumulate(model):
                     outputs = model(**batch)
                     loss = outputs.loss
-                    running_loss += loss.item()
+                    main_loss = outputs.main_loss.item()
+                    running_loss += main_loss
 
                     optimizer.zero_grad()
                     accelerator.backward(loss)
@@ -369,7 +374,7 @@ def train():
                     lr_scheduler.step()
 
                 batch_iterator.set_description(
-                    f"Epoch: {epoch} / {args.epochs}, Current Loss: {loss.item():.4f}"
+                    f"Epoch: {epoch} / {args.epochs}, Current Main-Loss: {main_loss:.4f}"
                 )
             except torch.cuda.OutOfMemoryError:
                 print("OutOfMemoty error on step", step, "skipping step")
@@ -562,7 +567,7 @@ def evaluate_train(
     for step, batch in enumerate(eval_batch_iterator):
         with torch.no_grad():
             outputs = model(**batch)
-            loss = outputs.loss
+            loss = outputs.main_loss
             running_loss += loss.item()
     running_loss /= len(dataloader)
     print(f"Loss in Epoch {epoch}: {running_loss}")
@@ -578,6 +583,12 @@ def evaluate_f1(
     all_targets = []
     all_preds = []
     all_inputs = []
+    all_gates = []
+
+    def gate_hook(module, inputs, outputs):
+        all_gates.extend(outputs.cpu())
+    model.gate.register_forward_hook(gate_hook)
+
     running_loss = 0.0
     model.eval()
     for inputs in eval_batch_iterator:
@@ -590,7 +601,7 @@ def evaluate_f1(
                 print("TimeoutError on input", inputs)
                 preds = torch.zeros((inputs["text"]["input_ids"].size(0), 1))
 
-        running_loss += preds.loss
+        running_loss += preds.main_loss
         all_preds.extend(preds.logits.cpu())
         all_targets.extend(labels.cpu())
         all_inputs.extend(inputs["text"]["input_ids"].cpu())
