@@ -639,24 +639,26 @@ class GatingLayer(nn.Module):
     def __init__(self, text_dim: int, audio_dim: int):
         super(GatingLayer, self).__init__()
         hidden_size = text_dim + audio_dim
-        self.hidden = nn.Linear(hidden_size, hidden_size)
-        self.ac = nn.SiLU()
+        self.hidden1 = nn.Linear(hidden_size, hidden_size)
+        self.hidden2 = nn.Linear(hidden_size, hidden_size)
         self.fc = nn.Linear(hidden_size, 2)
+        self.ac = nn.SiLU()
         self.dropout = nn.Dropout(0.3)
 
     def forward(self, text: torch.Tensor, audio: torch.Tensor):
-        gated = self.ac(self.hidden(self.dropout(torch.cat([text, audio], dim=-1))))
+        gated = self.ac(self.hidden1(self.dropout(torch.cat([text, audio], dim=-1))))
+        gated = self.ac(self.hidden2(self.dropout(gated)))
         return self.fc(self.dropout(gated))
 
 
-class ModalityProjector(nn.Module):
-    def __init__(self, config: MmLlamaConfig, in_dim: int, out_dim: int):
-        super(ModalityProjector, self).__init__()
+class ModalityClassifier(nn.Module):
+    def __init__(self, config: MmLlamaConfig, in_dim: int, out_dim: int, dropout: float = 0.3):
+        super(ModalityClassifier, self).__init__()
         self.down = nn.Linear(in_dim, out_dim)
         self.classifier = nn.Linear(out_dim, config.num_labels, bias=False)
         self.norm = LlamaRMSNorm(out_dim)
         self.ac = nn.SiLU()
-        self.dropout = nn.Dropout(0.3)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor, labels: torch.Tensor | None = None):
         main_path = self.ac(self.norm(self.down(x)))
@@ -669,17 +671,17 @@ class ModalityProjector(nn.Module):
         return main_path, cls_path, loss
 
 
-class MmLlamaForSequenceClassification(MmLlama):
+class MmLlamaForSequenceClassification(nn.Module):
     def __init__(self, config: MmLlamaConfig, **kwargs):
         super(MmLlamaForSequenceClassification, self).__init__(config, **kwargs)
         self.output_projection_size = 128
         # self.projector = LateFusionProjector(config, self.text_projection_size, self.audio_projection_size)
         # self.gate = GatingLayer(config)
-        self.text_projector = ModalityProjector(
-            config, config.llm_config.hidden_size, self.output_projection_size
+        self.text_projector = ModalityClassifier(
+            config, config.llm_config.hidden_size, self.output_projection_size, dropout=0.5
         )
-        self.audio_projector = ModalityProjector(
-            config, config.audio_config.hidden_size, self.output_projection_size
+        self.audio_projector = ModalityClassifier(
+            config, config.audio_config.hidden_size, self.output_projection_size, dropout=0.2
         )
 
         self.gate = GatingLayer(
@@ -689,8 +691,8 @@ class MmLlamaForSequenceClassification(MmLlama):
         self.classifier = nn.Linear(
             self.output_projection_size, config.num_labels, bias=False
         )
-        self.dropout = nn.Dropout(0.3)
-        self.norm = LlamaRMSNorm(self.output_projection_size)
+        # self.dropout = nn.Dropout(0.3)
+        # self.norm = LlamaRMSNorm(self.output_projection_size)
 
         self.ignore_acoustic = False
         self.ignore_text = False
@@ -721,13 +723,10 @@ class MmLlamaForSequenceClassification(MmLlama):
 
         gate = self.gate(text_down.detach(), audio_down.detach())
         gate_loss = None
-        if text_loss is not None and audio_loss is not None and labels is not None:
-            def get_labels(mod_pred:torch.Tensor):
-                preds = torch.argmax(mod_pred, dim=1)
-                return (preds == labels).float()
-            
-            gate_target = torch.stack([get_labels(text_pred), get_labels(audio_pred)], dim=1)
-            gate_loss = nn.BCEWithLogitsLoss()(gate, gate_target.detach())
+        if labels is not None: # implies that text_loss and audio_loss are not None
+            gate_target = torch.stack([get_dynamic_labels(text_pred, labels), get_dynamic_labels(audio_pred, labels)], dim=1)
+            weights = torch.zeros_like(gate_target, device=gate_target.device) + torch.stack([torch.ones(gate_target.size(0), device=gate_target.device), gate_target[:,1]*1.5 + 0.3], dim=1)
+            gate_loss = nn.BCEWithLogitsLoss(pos_weight=weights)(gate, gate_target.detach())
 
 
         loss = None
@@ -741,15 +740,17 @@ class MmLlamaForSequenceClassification(MmLlama):
             loss = main_loss = text_loss.mean()
 
         else:
-            gate = 1 - torch.softmax(gate.detach(), dim=1)
-            
-            merged = self.norm(text_down * gate[:, 0, None] + audio_down * gate[:, 1, None])
-            logits = self.classifier(self.dropout(merged))
+            gate = torch.relu(gate) 
+            logits = text_pred * gate[:, 0, None] + audio_pred * gate[:, 1, None]
+            # logits = self.classifier(self.dropout(merged))
             if labels is not None:
-                loss_fct = nn.CrossEntropyLoss()
+                loss_fct = nn.CrossEntropyLoss(reduction="none")
                 main_loss = loss_fct(
                     logits.view(-1, self.config.num_labels), labels.view(-1)
                 )
+                only_audio_correct = ((get_dynamic_labels(audio_pred, labels) == 1.0) & (get_dynamic_labels(logits, labels) == 0.0)).float().detach()
+                weights = torch.ones_like(main_loss, device=main_loss.device) + only_audio_correct * 1.0
+                main_loss = torch.mean(main_loss * weights.detach())
                 loss = main_loss + (text_loss.mean() + audio_loss.mean()) * 0.1
         
         if gate_loss is not None:
@@ -757,6 +758,16 @@ class MmLlamaForSequenceClassification(MmLlama):
 
         return SequenceClassifierOutput(logits=logits, loss=loss, main_loss=main_loss, text_loss=text_loss, audio_loss=audio_loss, gate_loss=gate_loss)
 
+
+    def freeze_projector(self):
+        for param in self.text_projector.parameters():
+            param.requires_grad = False
+        for param in self.audio_projector.parameters():
+            param.requires_grad = False
+
+def get_dynamic_labels(mod_pred:torch.Tensor, labels:torch.Tensor):
+    preds = torch.argmax(mod_pred, dim=1)
+    return (preds == labels).float().detach()
 
 
 
