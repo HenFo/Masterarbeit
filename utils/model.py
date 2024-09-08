@@ -1,4 +1,4 @@
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Union
 
@@ -213,17 +213,26 @@ class MmLlama(nn.Module, ABC):
             inputs_embeds=inputs_embeds, attention_mask=attention_mask, **kwargs
         )
 
-    def state_dict(self, modules: list[str] | str | None = None, exclude: list[str] | str | None = None, *args, **kwargs):
+    def state_dict(
+        self,
+        modules: list[str] | str | None = None,
+        exclude: list[str] | str | None = None,
+        *args,
+        **kwargs,
+    ):
         state_dict = super().state_dict(*args, **kwargs)
         if modules or exclude:
+
             def check_module(state_dict_module_name: str):
                 if modules:
                     return any([module in state_dict_module_name for module in modules])
                 else:
-                    return not any([module in state_dict_module_name for module in exclude])
+                    return not any(
+                        [module in state_dict_module_name for module in exclude]
+                    )
 
             state_dict = {k: v for k, v in state_dict.items() if check_module(k)}
-        
+
         return state_dict
 
     def apply_training_lora(
@@ -619,13 +628,18 @@ class MmLlamaMerge(MmLlamaConcat):
 
 
 class LateFusionProjector(nn.Module):
-    def __init__(self, config: MmLlamaConfig, text_out:int = 128, audio_out:int = 128):
+    def __init__(
+        self, config: MmLlamaConfig, text_out: int = 128, audio_out: int = 128
+    ):
         super(LateFusionProjector, self).__init__()
-        self.text_down_projector = nn.Linear(config.llm_config.hidden_size, text_out, bias=True)
-        self.audio_down_projector = nn.Linear(config.audio_config.hidden_size, audio_out, bias=True)
+        self.text_down_projector = nn.Linear(
+            config.llm_config.hidden_size, text_out, bias=True
+        )
+        self.audio_down_projector = nn.Linear(
+            config.audio_config.hidden_size, audio_out, bias=True
+        )
         self.norm = LlamaRMSNorm(text_out)
         self.ac = nn.SiLU()
-    
 
     def forward(self, text: torch.Tensor, audio: torch.Tensor, alpha: float = 0.5):
         text_down = self.ac(self.text_down_projector(text)) * (1 - alpha)
