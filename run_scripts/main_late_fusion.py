@@ -192,10 +192,12 @@ def load_model_for_stage(
 
 
 def _load_model_for_stage_1(model: MmLlamaForSequenceClassification):
-    model.ignore_text = True
+    model.ignore_acoustic = True
+    model.train_gate = False
 
     def execute_after_prepare(model: MmLlamaForSequenceClassification):
         model.freeze_encoder(train_norm=False)
+        model.freeze_gate()
         return model
 
     return model, execute_after_prepare
@@ -206,10 +208,12 @@ def _load_model_for_stage_2(model: MmLlamaForSequenceClassification):
         torch.load(os.path.join(args.checkpoint_path, "best_model.pth")), strict=False
     )
 
-    model.ignore_acoustic = True
+    model.ignore_text = True
+    model.train_gate = False
 
     def execute_after_prepare(model: MmLlamaForSequenceClassification):
         model.freeze_encoder(train_norm=False)
+        model.freeze_gate()
         return model
 
     return model, execute_after_prepare
@@ -217,14 +221,11 @@ def _load_model_for_stage_2(model: MmLlamaForSequenceClassification):
 
 def _load_model_for_stage_3(model: MmLlamaForSequenceClassification):
     state_dict = torch.load(os.path.join(args.checkpoint_path, "best_model.pth"))
-    # state_dict["classifier.weight"] = (
-    #     state_dict["text_projector.classifier.weight"]
-    #     + state_dict["audio_projector.classifier.weight"]
-    # ) / 2
     model.load_state_dict(state_dict, strict=False)
 
     def execute_after_prepare(model: MmLlamaForSequenceClassification):
         model.freeze_encoder(train_norm=False)
+        model.freeze_projector()
         return model
 
     return model, execute_after_prepare
@@ -366,7 +367,7 @@ def train():
             desc=f"Epoch {epoch}",
         )
         running_loss = 0
-        running_gate_loss = 0
+        # running_gate_loss = 0
         for step, batch in batch_iterator:
             try:
                 with accelerator.accumulate(model):
@@ -374,7 +375,7 @@ def train():
                     loss = outputs.loss
                     main_loss = outputs.main_loss.item()
                     running_loss += main_loss
-                    running_gate_loss += outputs.gate_loss.item()
+                    # running_gate_loss += outputs.gate_loss.item()
 
                     optimizer.zero_grad()
                     accelerator.backward(loss)
@@ -391,8 +392,13 @@ def train():
                 torch.cuda.empty_cache()
 
         running_loss /= len(train_dataloader)
-        running_gate_loss /= len(train_dataloader)
-        train_losses.append({"train_loss": running_loss, "train_gate_loss": running_gate_loss})
+        # running_gate_loss /= len(train_dataloader)
+        train_losses.append(
+            {
+                "train_loss": running_loss,
+                # "train_gate_loss": running_gate_loss
+            }
+        )
 
         # evaluation
 
@@ -405,9 +411,14 @@ def train():
                 collate_fn=SequenceClassificationCollator(processor, eval_dataset),
                 sampler=SequentialSampler(eval_dataset),
             )
-            # eval_dataloader = accelerator.prepare(eval_dataloader)
+
             eval_loss, eval_gate_loss = evaluate_train(model, epoch, eval_dataloader)
-            eval_losses.append({"eval_loss": eval_loss, "eval_gate_loss": eval_gate_loss})
+            eval_losses.append(
+                {
+                    "eval_loss": eval_loss,
+                    # "eval_gate_loss": eval_gate_loss
+                }
+            )
             if eval_loss < best_eval_loss:
                 print("Saving model")
                 best_eval_loss = eval_loss
@@ -576,11 +587,11 @@ def evaluate_train(
             outputs = model(**prepare_batch(batch))
             loss = outputs.main_loss
             running_loss += loss.item()
-            running_loss_gate += outputs.gate_loss.item()
+            # running_loss_gate += outputs.gate_loss.item()
     running_loss /= len(dataloader)
-    running_loss_gate /= len(dataloader)
+    # running_loss_gate /= len(dataloader)
     print(f"Loss in Epoch {epoch}: {running_loss}")
-    print(f"Gate Loss in Epoch {epoch}: {running_loss_gate}")
+    # print(f"Gate Loss in Epoch {epoch}: {running_loss_gate}")
     return running_loss, running_loss_gate
 
 

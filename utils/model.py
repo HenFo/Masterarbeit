@@ -1,4 +1,5 @@
 from abc import ABC
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Union
 
@@ -250,11 +251,13 @@ class MmLlama(nn.Module, ABC):
                 self.llama = PeftModel.from_pretrained(
                     self.llama, adapter_id, is_trainable=resume_training
                 )
+                print(f"####### Loaded adapter: {adapter_id} #######")
             except ValueError:
                 print("!!!!!!!!! Could not load the adapter for training !!!!!!!!!")
         else:
             print("####### Applying new Lora-Adapter #######")
             self.llama = get_peft_model(self.llama, lora_config)
+            self.llama.print_trainable_parameters()
         return self
 
     def print_trainable_parameters(self):
@@ -277,10 +280,11 @@ class MmLlama(nn.Module, ABC):
             f"Trainable parameters: {formatted_param_sum}/{formatted_total_sum} ({formatted_trainable_percentage}%)"
         )
 
-    def apply_inference_lora(self, adapter_id: str):
+    def apply_inference_lora(self, adapter_id: str, merge: bool = True):
         try:
             self.llama = PeftModel.from_pretrained(self.llama, adapter_id)
-            self.llama = self.llama.merge_and_unload(progressbar=True)
+            if merge:
+                self.llama = self.llama.merge_and_unload(progressbar=True)
         except Exception:
             print("!!!!!!!!! Could not load the adapter for inference !!!!!!!!!")
         return self
@@ -627,27 +631,6 @@ class MmLlamaMerge(MmLlamaConcat):
         }
 
 
-class LateFusionProjector(nn.Module):
-    def __init__(
-        self, config: MmLlamaConfig, text_out: int = 128, audio_out: int = 128
-    ):
-        super(LateFusionProjector, self).__init__()
-        self.text_down_projector = nn.Linear(
-            config.llm_config.hidden_size, text_out, bias=True
-        )
-        self.audio_down_projector = nn.Linear(
-            config.audio_config.hidden_size, audio_out, bias=True
-        )
-        self.norm = LlamaRMSNorm(text_out)
-        self.ac = nn.SiLU()
-
-    def forward(self, text: torch.Tensor, audio: torch.Tensor, alpha: float = 0.5):
-        text_down = self.ac(self.text_down_projector(text)) * (1 - alpha)
-        audio_down = self.ac(self.audio_down_projector(audio)) * alpha
-
-        normed = self.norm(text_down + audio_down)
-        return normed
-
 
 class GatingLayer(nn.Module):
     def __init__(self, text_dim: int, audio_dim: int):
@@ -655,14 +638,19 @@ class GatingLayer(nn.Module):
         hidden_size = text_dim + audio_dim
         self.hidden1 = nn.Linear(hidden_size, hidden_size)
         self.hidden2 = nn.Linear(hidden_size, hidden_size)
+        self.hidden3 = nn.Linear(hidden_size, hidden_size)
         self.fc = nn.Linear(hidden_size, 2)
         self.ac = nn.SiLU()
         self.dropout = nn.Dropout(0.3)
+        self.norm1 = nn.LayerNorm(hidden_size)
+        self.norm2 = nn.LayerNorm(hidden_size)
+        self.norm3 = nn.LayerNorm(hidden_size)
 
     def forward(self, text: torch.Tensor, audio: torch.Tensor):
-        gated = self.ac(self.hidden1(self.dropout(torch.cat([text, audio], dim=-1))))
-        gated = self.ac(self.hidden2(self.dropout(gated)))
-        return self.fc(self.dropout(gated))
+        gated1 = self.ac(self.hidden1(self.dropout(torch.cat([text, audio], dim=-1))))
+        gated2 = self.ac(self.hidden2(self.dropout(self.norm1(gated1))))
+        gated3 = self.ac(self.hidden3(self.dropout(self.norm2(gated2))))
+        return self.fc(self.dropout(self.norm3(gated3 + gated1)))
 
 
 class ModalityClassifier(nn.Module):
@@ -685,12 +673,11 @@ class ModalityClassifier(nn.Module):
         return main_path, cls_path, loss
 
 
-class MmLlamaForSequenceClassification(nn.Module):
+class MmLlamaForSequenceClassification(MmLlama):
     def __init__(self, config: MmLlamaConfig, **kwargs):
         super(MmLlamaForSequenceClassification, self).__init__(config, **kwargs)
         self.output_projection_size = 128
-        # self.projector = LateFusionProjector(config, self.text_projection_size, self.audio_projection_size)
-        # self.gate = GatingLayer(config)
+
         self.text_projector = ModalityClassifier(
             config, config.llm_config.hidden_size, self.output_projection_size, dropout=0.5
         )
@@ -701,12 +688,6 @@ class MmLlamaForSequenceClassification(nn.Module):
         self.gate = GatingLayer(
             self.output_projection_size, self.output_projection_size
         )
-
-        self.classifier = nn.Linear(
-            self.output_projection_size, config.num_labels, bias=False
-        )
-        # self.dropout = nn.Dropout(0.3)
-        # self.norm = LlamaRMSNorm(self.output_projection_size)
 
         self.ignore_acoustic = False
         self.ignore_text = False
@@ -721,11 +702,12 @@ class MmLlamaForSequenceClassification(nn.Module):
         labels: torch.LongTensor | None = None,
         **kwargs,
     ):
-        llm_outputs = (
-            self.llama(**text, **kwargs, output_hidden_states=True)
-            .hidden_states[-1]
-            .detach()
-        )
+        with self.without_adapter():
+            llm_outputs = (
+                self.llama(**text, **kwargs, output_hidden_states=True)
+                .hidden_states[-1]
+                .detach()
+            )
         audio_outputs = self.wave2vec2(**acoustic).last_hidden_state.detach()
 
         # assume left padding
@@ -734,13 +716,6 @@ class MmLlamaForSequenceClassification(nn.Module):
 
         text_down, text_pred, text_loss = self.text_projector(pooled_text, labels)
         audio_down, audio_pred, audio_loss = self.audio_projector(pooled_audio, labels)
-
-        gate = self.gate(text_down.detach(), audio_down.detach())
-        gate_loss = None
-        if labels is not None: # implies that text_loss and audio_loss are not None
-            gate_target = torch.stack([get_dynamic_labels(text_pred, labels), get_dynamic_labels(audio_pred, labels)], dim=1)
-            weights = torch.zeros_like(gate_target, device=gate_target.device) + torch.stack([torch.ones(gate_target.size(0), device=gate_target.device), gate_target[:,1]*1.5 + 0.3], dim=1)
-            gate_loss = nn.BCEWithLogitsLoss(pos_weight=weights)(gate, gate_target.detach())
 
 
         loss = None
@@ -754,6 +729,7 @@ class MmLlamaForSequenceClassification(nn.Module):
             loss = main_loss = text_loss.mean()
 
         else:
+            gate = self.gate(text_down, audio_down)
             gate = torch.relu(gate) 
             logits = text_pred * gate[:, 0, None] + audio_pred * gate[:, 1, None]
             # logits = self.classifier(self.dropout(merged))
@@ -762,15 +738,16 @@ class MmLlamaForSequenceClassification(nn.Module):
                 main_loss = loss_fct(
                     logits.view(-1, self.config.num_labels), labels.view(-1)
                 )
+                audio_correct = (get_dynamic_labels(audio_pred, labels) == 1.0).float().detach()
                 only_audio_correct = ((get_dynamic_labels(audio_pred, labels) == 1.0) & (get_dynamic_labels(logits, labels) == 0.0)).float().detach()
-                weights = torch.ones_like(main_loss, device=main_loss.device) + only_audio_correct * 1.0
-                main_loss = torch.mean(main_loss * weights.detach())
-                loss = main_loss + (text_loss.mean() + audio_loss.mean()) * 0.1
-        
-        if gate_loss is not None:
-            loss = loss + gate_loss
 
-        return SequenceClassifierOutput(logits=logits, loss=loss, main_loss=main_loss, text_loss=text_loss, audio_loss=audio_loss, gate_loss=gate_loss)
+                weights = torch.ones_like(main_loss, device=main_loss.device) + only_audio_correct * 0.5 + audio_correct * 1
+                weights[weights == 1.0] = 0.3
+                main_loss = torch.mean(main_loss * weights.detach())
+                loss = main_loss # + (text_loss.mean() + audio_loss.mean()) * 0.1
+        
+
+        return SequenceClassifierOutput(logits=logits, loss=loss, main_loss=main_loss, text_loss=text_loss, audio_loss=audio_loss)
 
 
     def freeze_projector(self):
@@ -779,9 +756,25 @@ class MmLlamaForSequenceClassification(nn.Module):
         for param in self.audio_projector.parameters():
             param.requires_grad = False
 
+    def freeze_gate(self):
+        for param in self.gate.parameters():
+            param.requires_grad = False
+
+    @contextmanager
+    def without_adapter(self):
+        try:
+            self.llama.disable_adapter_layers()
+            yield
+            self.llama.enable_adapter_layers()
+        except Exception:
+            yield
+
 def get_dynamic_labels(mod_pred:torch.Tensor, labels:torch.Tensor):
     preds = torch.argmax(mod_pred, dim=1)
     return (preds == labels).float().detach()
+
+
+
 
 
 
