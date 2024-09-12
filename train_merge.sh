@@ -4,9 +4,7 @@ TRAIN=True
 TEST=True
 ABLATION=True
 
-
 WINDOW=12
-
 
 # dataset="meld"
 dataset="iemocap"
@@ -35,7 +33,6 @@ else
     exit 1
 fi
 
-
 stage_1_path=$OUTPUT_PATH"stage_1/"
 stage_2_path=$OUTPUT_PATH"stage_2/"
 stage_3_path=$OUTPUT_PATH"stage_3/"
@@ -62,8 +59,7 @@ if [ $TEST_ONLY = False ]; then
         --alpha 1.0 \
         --stage 1 \
         --resume_training \
-        --window_size $WINDOW 
-
+        --window_size $WINDOW
 
     if [ $? -ne 0 ]; then
         echo "An error occurred. Terminating."
@@ -71,7 +67,6 @@ if [ $TEST_ONLY = False ]; then
     fi
 
     output_path=$stage_1_path
-
 
     echo "Running stage 2"
     accelerate launch ./run_scripts/main_merge.py \
@@ -97,8 +92,8 @@ if [ $TEST_ONLY = False ]; then
         --lora_dropout 0.1 \
         --lora_module_name ".*?[qkvo]_proj" \
         --do_auxilary_task \
-        --resume_training 
-        # --time_till_aux 10 \
+        --resume_training
+    # --time_till_aux 10 \
 
     if [ $? -ne 0 ]; then
         echo "An error occurred. Terminating."
@@ -108,7 +103,7 @@ if [ $TEST_ONLY = False ]; then
     echo "Running stage 3"
     accelerate launch ./run_scripts/main_merge.py \
         --batch_size 2 \
-        --gradient_accumulation_steps 16 \
+    --gradient_accumulation_steps 16 \
         --llm_id $LANGUAGE_MODEL \
         --acoustic_id $ACOUSTIC_MODEL \
         --adapter_id $LORA_ADAPTER \
@@ -122,8 +117,8 @@ if [ $TEST_ONLY = False ]; then
         --lr 2e-4 \
         --min_lr_ratio 0.5 \
         --stage 3 \
-        --window_size $WINDOW 
-        # --resume_training 
+        --window_size $WINDOW
+    # --resume_training
 
     output_path=$stage_2_path
 
@@ -135,7 +130,6 @@ if [ $TEST_ONLY = False ]; then
     output_path=$stage_3_path
 
 fi
-
 
 if [ $TEST = True ]; then
 
@@ -152,4 +146,3 @@ if [ $TEST = True ]; then
         --batch_size 1
 
 fi
-

@@ -4,9 +4,7 @@ TRAIN=True
 TEST=True
 ABLATION=True
 
-
 WINDOW=12
-
 
 # dataset="meld"
 dataset="iemocap"
@@ -34,7 +32,6 @@ else
     echo "Invalid dataset"
     exit 1
 fi
-
 
 stage_1_path=$OUTPUT_PATH"stage_1/"
 stage_2_path=$OUTPUT_PATH"stage_2/"
@@ -66,7 +63,6 @@ if [ $TRAIN = True ]; then
 
     output_path=$stage_1_path
 
-
     echo "Running stage 2"
     accelerate launch ./run_scripts/main_concat.py \
         --batch_size 2 \
@@ -94,9 +90,7 @@ if [ $TRAIN = True ]; then
         exit 1
     fi
 
-
 fi
-
 
 if [ $TEST = True ]; then
 

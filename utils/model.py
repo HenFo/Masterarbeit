@@ -6,15 +6,14 @@ from typing import Dict, List, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from peft import PeftModel, PeftConfig, get_peft_model
+from peft import PeftConfig, PeftModel, get_peft_model
 from transformers import AutoModel, AutoModelForCausalLM
 from transformers.configuration_utils import PretrainedConfig
+from transformers.models.llama.modeling_llama import LlamaRMSNorm
 from transformers.models.wav2vec2.modeling_wav2vec2 import (
     Wav2Vec2Model,
     Wav2Vec2PreTrainedModel,
 )
-from transformers.models.llama.modeling_llama import LlamaRMSNorm
-from pytorch_metric_learning import losses
 
 
 class ClassificationHead(nn.Module):
