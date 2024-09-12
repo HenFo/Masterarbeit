@@ -278,7 +278,7 @@ class ERCDataset(Dataset, ABC):
         dialog_chain = " \t ".join(prompts.iloc[:-1])
         target = dialog.iloc[-1]
         instruction = f"Please select the Speaker label of the next utterance <Speaker: {target['Utterance']}> from <{', '.join(self.speaker)}>:"
-        prompt = f"Now you are expert of sentiment and emotional analysis. The following conversation noted between '### ###' involves several speaker. ### {dialog_chain} ### {instruction}"
+        prompt = f"Now you are expert of sentiment and emotional analysis. The following conversation noted between '### ###' involves several speakers. ### {dialog_chain} ### {instruction}"
         return {"input": prompt, "target": target["Speaker"]}
 
     def _generate_emotion_prediction(self, dialog: pd.DataFrame) -> dict:
@@ -287,7 +287,7 @@ class ERCDataset(Dataset, ABC):
             dialog_chain = " \t ".join(prompts.iloc[:-1])
             target = dialog.iloc[-1]
             instruction = f"Based on the above historical utterances, next utterance is spoken by <{target['Speaker']}>, please predict the emotion states of <{target['Speaker']}> from <{', '.join(self.emotions)}>:"
-            prompt = f"Now you are expert of sentiment and emotional analysis. The following conversation noted between '### ###' involves several speaker. ### {dialog_chain} ### {instruction}"
+            prompt = f"Now you are expert of sentiment and emotional analysis. The following conversation noted between '### ###' involves several speakers. ### {dialog_chain} ### {instruction}"
             return {"input": prompt, "target": target["Emotion"]}
 
         return self._generate_input(dialog, self.emotions)
@@ -299,14 +299,14 @@ class ERCDataset(Dataset, ABC):
         include_text: bool = True,
     ) -> dict:
         prompts = dialog["Speaker"] + ': "' + dialog["Utterance"] + '"'
-        dialog_chain = " \t ".join(prompts)
+        dialog_chain = "### "+" \t ".join(prompts) + " ###"
         target = dialog.iloc[-1]
         instruction = f"Please select the emotional label of <{target['Speaker']}: "
         if include_audio:
             if self.audio_placement == "target":
-                instruction += "<audio>"
+                dialog_chain += " Audio features of last utterance: <audio>"
             if self.audio_placement == "front":
-                dialog_chain = f"<audio> {dialog_chain}"
+                dialog_chain = f"Audio features of last utterance: <audio> {dialog_chain}"
         if include_text:
             if self.audio_placement == "enclose":
                 target_utterance = f"<audio> {target['Utterance']} </audio>"
@@ -319,10 +319,15 @@ class ERCDataset(Dataset, ABC):
                 )
             else:
                 instruction += f"\"{target['Utterance']}\""
+        
 
-        instruction += f"> from <{', '.join(self.emotions)}>:"
+        instruction += f"> from <{', '.join(self.emotions)}>"
+        if include_audio:
+            instruction += " based on both the context and audio features:"
+        else:
+            instruction += " based on the context:"
 
-        prompt = f"Now you are expert of sentiment and emotional analysis. The following conversation noted between '### ###' involves several speaker. ### {dialog_chain} ### {instruction}"
+        prompt = f"Now you are expert of sentiment and emotional analysis. The following conversation noted between '### ###' involves several speaker. {dialog_chain} {instruction}"
         return {"input": prompt, "target": target["Emotion"]}
 
 
@@ -460,7 +465,7 @@ if __name__ == "__main__":
     PATH = "/home/fock/code/MultiModalInstructERC/datasets/iemocap/iemocap.csv"
     # tasks = ["normal", "speaker", "emotion", "mixed"]
     ds = IemocapDataset(
-        PATH, mode="test", window=3, task="normal", audio_placement="none"
+        PATH, mode="test", window=3, task="normal", audio_placement="target", include_target_text_percentage=0
     )
 
     x = ds[3]
