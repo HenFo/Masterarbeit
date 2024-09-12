@@ -428,19 +428,17 @@ def train():
         train_losses.append(running_loss)
 
         # evaluation
-        eval_dataloader = DataLoader(
-            eval_dataset,
-            batch_size=args.batch_size,
-            shuffle=False,
-            num_workers=4,
-            collate_fn=SequenceGenerationCollator(
-                processor, mode="train"
-            ),  # mode=train because we test performance using loss,  not f1
-            sampler=SequentialSampler(eval_dataset),
-        )
 
         if accelerator.is_main_process:
-            eval_dataloader = accelerator.prepare(eval_dataloader)
+            eval_dataloader = DataLoader(
+                eval_dataset,
+                batch_size=args.batch_size,
+                shuffle=False,
+                num_workers=4,
+                collate_fn=SequenceGenerationCollator(processor, mode="train"),
+                sampler=SequentialSampler(eval_dataset),
+            )
+
             eval_loss = evaluate_train(model, epoch, eval_dataloader)
             eval_losses.append(eval_loss)
             if eval_loss < best_eval_loss:
@@ -535,7 +533,7 @@ def _set_stage_2_changes(
 def save_model(accelerator: Accelerator, tokenizer, model):
     unwrapped_model = accelerator.unwrap_model(model)
     accelerator.save(
-        unwrapped_model.state_dict(modules=["projector", "alpha"]),
+        unwrapped_model.state_dict(exclude=["llama", "wave2vec2"]),
         os.path.join(args.output_path, "best_model.pth"),
     )
 
@@ -593,8 +591,12 @@ def load_checkpoint(accelerator: Accelerator, model: MmLlama, checkpoint_path: s
 
 def prepare_batch(batch: dict[str, dict[str, torch.Tensor]]):
     for k in batch:
+        if type(batch[k]) is torch.Tensor:
+            batch[k] = batch[k].cuda()
+            continue
         for kk in batch[k]:
             batch[k][kk] = batch[k][kk].cuda()
+
     return batch
 
 
@@ -645,7 +647,7 @@ def evaluate_train(
     model.eval()
     for step, batch in enumerate(eval_batch_iterator):
         with torch.no_grad():
-            outputs = model(**batch)
+            outputs = model(**prepare_batch(batch))
             loss = outputs["loss"]
             running_loss += loss.item()
     running_loss /= len(dataloader)

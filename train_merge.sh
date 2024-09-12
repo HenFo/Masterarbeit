@@ -1,6 +1,9 @@
 #!/bin/bash
 
-TEST_ONLY=False
+TRAIN=True
+TEST=True
+ABLATION=True
+
 
 WINDOW=12
 
@@ -9,7 +12,7 @@ WINDOW=12
 dataset="iemocap"
 model="LLaMA2-base"
 
-experiment="mlp/merge/interpolate/$dataset/$model/audio_upscale_10"
+experiment="merge/$dataset/$model/mlp"
 
 LANGUAGE_MODEL="/home/fock/code/MultiModalInstructERC/models/language/$model"
 LORA_ADAPTER="/home/fock/code/MultiModalInstructERC/models/language/adapter/$dataset/$model"
@@ -36,7 +39,8 @@ fi
 stage_1_path=$OUTPUT_PATH"stage_1/"
 stage_2_path=$OUTPUT_PATH"stage_2/"
 stage_3_path=$OUTPUT_PATH"stage_3/"
-output_path=""
+
+output_path=$stage_3_path
 
 if [ $TEST_ONLY = False ]; then
     echo "Running stage 1"
@@ -68,7 +72,6 @@ if [ $TEST_ONLY = False ]; then
 
     output_path=$stage_1_path
 
-    cp $stage_1_path"best_model.pth" $stage_2_path
 
     echo "Running stage 2"
     accelerate launch ./run_scripts/main_merge.py \
@@ -128,21 +131,25 @@ if [ $TEST_ONLY = False ]; then
         echo "An error occurred. Terminating."
         exit 1
     fi
-    # cp $stage_2_path"best_model.pth" $stage_3_path
 
-    # output_path=$stage_3_path
+    output_path=$stage_3_path
 
 fi
 
-echo "Running evaluation"
-python run_scripts/main_merge.py \
-    --evaluation \
-    --llm_id $LANGUAGE_MODEL \
-    --acoustic_id $ACOUSTIC_MODEL \
-    --adapter_id $LORA_ADAPTER \
-    --output_path $output_path \
-    --test_dataset $DS_TEST_PATH \
-    --dev_dataset $DS_DEV_PATH \
-    --window_size $WINDOW \
-    --batch_size 1
+
+if [ $TEST = True ]; then
+
+    echo "Running evaluation"
+    python run_scripts/main_merge.py \
+        --evaluation \
+        --llm_id $LANGUAGE_MODEL \
+        --acoustic_id $ACOUSTIC_MODEL \
+        --adapter_id $LORA_ADAPTER \
+        --output_path $output_path \
+        --test_dataset $DS_TEST_PATH \
+        --dev_dataset $DS_DEV_PATH \
+        --window_size $WINDOW \
+        --batch_size 1
+
+fi
 
