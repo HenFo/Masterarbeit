@@ -183,6 +183,8 @@ def load_model_for_stage(
         return _load_model_for_stage_1(model)
     elif stage == 2:
         return _load_model_for_stage_2(model)
+    elif stage == 3:
+        return _load_model_for_stage_3(model)
     else:
         raise ValueError("Invalid stage number")
 
@@ -212,6 +214,20 @@ def _load_model_for_stage_2(model: MmLlamaConcat):
     )
 
     model = model.apply_training_lora(lora_config)
+
+    def execute_after_prepare(model: MmLlamaConcat):
+        # model.freeze_projector()
+        return model
+
+    return model, execute_after_prepare
+
+
+def _load_model_for_stage_3(model: MmLlamaConcat):
+    model.load_state_dict(
+        torch.load(os.path.join(args.checkpoint_path, "best_model.pth")), strict=False
+    )
+
+    model = model.apply_training_lora(adapter_id=args.checkpoint_path, resume_training=args.train_llm)
 
     def execute_after_prepare(model: MmLlamaConcat):
         # model.freeze_projector()
@@ -279,21 +295,18 @@ def train():
     tokenizer, processor, config = setup_config_and_processor()
 
     ## setup datasets
-    include_text = 0 if args.stage == 2 and args.do_auxilary_task else 1
     train_dataset = dataset_class(args.train_dataset)(
         args.train_dataset,
         mode="train",
         task=args.task,
         window=args.window_size,
-        include_target_text_percentage=include_text,
         audio_placement="target",
     )
     eval_dataset = dataset_class(args.dev_dataset)(
         args.dev_dataset,
         mode="test",  # for iemocap
-        task="normal",
+        task=args.task,
         window=args.window_size,
-        include_target_text_percentage=include_text,
         audio_placement="target",
     )
     # test_dataset = MeldDataset(args.test_dataset, mode="test", task="normal")

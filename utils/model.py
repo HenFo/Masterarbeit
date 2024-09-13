@@ -284,6 +284,7 @@ class MmLlama(nn.Module, ABC):
             self.llama = PeftModel.from_pretrained(self.llama, adapter_id)
             if merge:
                 self.llama = self.llama.merge_and_unload(progressbar=True)
+            print(f"####### Loaded adapter: {adapter_id} #######")
         except Exception:
             print("!!!!!!!!! Could not load the adapter for inference !!!!!!!!!")
         return self

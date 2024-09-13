@@ -162,7 +162,7 @@ class ERCDataset(Dataset, ABC):
         include_target_text_percentage: float = 1.0,
     ):
         assert mode in ["train", "dev", "test"]
-        assert task in ["normal", "speaker", "emotion", "mixed"]
+        assert task in ["normal", "speaker", "emotion", "mixed", "audio_only"]
         assert audio_placement in ["target", "front", "enclose", "none"]
         self.mode = mode
         self.dataset_path = dataset_path
@@ -190,16 +190,19 @@ class ERCDataset(Dataset, ABC):
 
         if self.task == "normal":
             audio, text = self._get_normal_input(history)
-        if self.task == "emotion":
+        elif self.task == "emotion":
             text = self._generate_emotion_prediction(history)
-        if self.task == "mixed":
+        elif self.task == "mixed":
             if np.random.random() > self.mix_rate:
                 audio, text = self._get_normal_input(history)
             else:
                 text = self._generate_emotion_prediction(history)
 
-        if self.task == "speaker":
+        elif self.task == "speaker":
             text = self._generate_speaker_ident_task(history)
+
+        elif self.task == "audio_only":
+            audio, text = self._get_audio_only_input(history)
 
         return (audio, text["input"]), text["target"]
 
@@ -291,6 +294,13 @@ class ERCDataset(Dataset, ABC):
             return {"input": prompt, "target": target["Emotion"]}
 
         return self._generate_input(dialog, self.emotions)
+    
+    def _get_audio_only_input(self, dialog: pd.DataFrame) -> dict:
+        target = dialog.iloc[-1]
+        audio = self._get_audio(target)
+        instruction = f"Please select the emotional state of the speaker from <{', '.join(self.emotions)}> based on the given audio features:"
+        prompt = f"Now you are expert of sentiment and emotional analysis. The following are audio features of one person speaking as part of a conversation, noted between '[' and ']': Audio features: [<audio>] {instruction}"
+        return audio, {"input": prompt, "target": target["Emotion"]}
 
     def _generate_input(
         self,
@@ -304,9 +314,9 @@ class ERCDataset(Dataset, ABC):
         instruction = f"Please select the emotional label of <{target['Speaker']}: "
         if include_audio:
             if self.audio_placement == "target":
-                dialog_chain += " Audio features of last utterance: <audio>"
+                dialog_chain += " Audio features of last utterance: [<audio>]"
             if self.audio_placement == "front":
-                dialog_chain = f"Audio features of last utterance: <audio> {dialog_chain}"
+                dialog_chain = f"Audio features of last utterance: [<audio>] {dialog_chain}"
         if include_text:
             if self.audio_placement == "enclose":
                 target_utterance = f"<audio> {target['Utterance']} </audio>"
@@ -322,10 +332,8 @@ class ERCDataset(Dataset, ABC):
         
 
         instruction += f"> from <{', '.join(self.emotions)}>"
-        if include_audio:
+        if include_audio and self.audio_placement == "target":
             instruction += " based on both the context and audio features:"
-        else:
-            instruction += " based on the context:"
 
         prompt = f"Now you are expert of sentiment and emotional analysis. The following conversation noted between '### ###' involves several speaker. {dialog_chain} {instruction}"
         return {"input": prompt, "target": target["Emotion"]}
@@ -465,8 +473,8 @@ if __name__ == "__main__":
     PATH = "/home/fock/code/MultiModalInstructERC/datasets/iemocap/iemocap.csv"
     # tasks = ["normal", "speaker", "emotion", "mixed"]
     ds = IemocapDataset(
-        PATH, mode="test", window=3, task="normal", audio_placement="target", include_target_text_percentage=0
+        PATH, mode="test", window=1, task="normal", audio_placement="enclose"
     )
 
     x = ds[3]
-    print(x)
+    print(x[0][1])
