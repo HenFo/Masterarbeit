@@ -216,7 +216,7 @@ def _load_model_for_stage_2(model: MmLlamaConcat):
     model = model.apply_training_lora(lora_config)
 
     def execute_after_prepare(model: MmLlamaConcat):
-        # model.freeze_projector()
+        model.freeze_projector()
         return model
 
     return model, execute_after_prepare
@@ -448,7 +448,6 @@ def train():
             set_auxilary_changes(
                 model=accelerator.unwrap_model(model),
                 train_dataloader=train_dataloader,
-                eval_dataloader=eval_dataloader,
                 epoch=epoch,
                 best_loss=best_eval_loss,
                 eval_losses=eval_losses,
@@ -467,8 +466,9 @@ def _set_stage_1_changes(train_dataloader, epoch: int, **_):
     pass
 
 
-def _set_stage_2_changes(eval_dataloader, train_dataloader, epoch: int, **_):
-    pass
+def _set_stage_2_changes(model:MmLlamaConcat, epoch: int, **_):
+    if args.epochs // 2 == epoch:
+        model.unfreeze_projector()
 
 
 def save_model(accelerator: Accelerator, tokenizer, model):
@@ -512,6 +512,7 @@ def load_checkpoint(accelerator: Accelerator, model: MmLlama, checkpoint_path: s
     accelerator.load_state(checkpoint_path, load_module_strict=False)
     checkpoint = torch.load(os.path.join(checkpoint_path, "checkpoint_metadata.bin"))
     if args.train_llm:
+        # TODO: fix prepare model does not rewrap in deepspeed engine
         model = accelerator.unwrap_model(model)
         model.apply_training_lora(adapter_id=checkpoint_path, resume_training=True)
         model = accelerator.prepare_model(model)
@@ -552,7 +553,7 @@ def test():
         args.test_dataset,
         mode="test",
         audio_placement="target",
-        task="normal",
+        task=args.task,
         window=args.window_size,
     )
 
@@ -574,8 +575,8 @@ def test():
     f1 = evaluate_f1(tokenizer, model, test_dataloader_f1)
     print(f"F1 in Test: {f1}")
 
-    loss = evaluate_loss(model, test_dataloader_loss)
-    print(f"Loss in Test: {loss}")
+    # loss = evaluate_loss(model, test_dataloader_loss)
+    # print(f"Loss in Test: {loss}")
 
 
 def evaluate_train(
@@ -614,6 +615,9 @@ def evaluate_f1(
             except TimeoutError:
                 print("TimeoutError on input", inputs)
                 preds = torch.zeros((inputs["text"]["input_ids"].size(0), 1))
+            except RuntimeError:
+                print("RuntimeError on input", inputs)
+                preds = torch.zeros((inputs["text"]["input_ids"].size(0), 1))
 
         all_preds.extend(preds.cpu())
         all_targets.extend(labels)
@@ -644,7 +648,7 @@ def evaluate_f1(
                 "target": target,
             }
         )
-    with open(os.path.join(args.output_path, "preds_test.json"), "wt") as f:
+    with open(os.path.join(args.output_path, f"preds_test_{args.task}.json"), "wt") as f:
         json.dump(preds_for_eval, f)
 
     return f1

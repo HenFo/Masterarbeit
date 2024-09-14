@@ -1,5 +1,6 @@
 #!/bin/bash
 
+
 TRAIN=True
 TEST=True
 ABLATION=True
@@ -10,7 +11,27 @@ WINDOW=12
 dataset="iemocap"
 model="LLaMA2-base"
 
-experiment="concat/$dataset/$model/mlp/audio_only_pretraining"
+experiment_suffix="audio_only_pretraining"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dataset)
+            dataset=$2
+            shift
+            ;;
+        --experiment_suffix)
+            experiment_suffix=$2
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+experiment="concat/final/$dataset/$model/$experiment_suffix"
 
 LANGUAGE_MODEL="/home/fock/code/MultiModalInstructERC/models/language/$model"
 LORA_ADAPTER="/home/fock/code/MultiModalInstructERC/models/language/adapter/$dataset/$model"
@@ -39,7 +60,7 @@ stage_3_path=$OUTPUT_PATH"stage_3/"
 
 output_path=$stage_1_path
 
-if [ $TRAIN = True ]; then
+if [ "$TRAIN" = "True" ]; then
     echo "Running stage 1"
     accelerate launch ./run_scripts/main_concat.py \
         --batch_size 8 \
@@ -52,13 +73,13 @@ if [ $TRAIN = True ]; then
         --test_dataset $DS_TEST_PATH \
         --dev_dataset $DS_DEV_PATH \
         --task "audio_only" \
-        --epochs 15 \
-        --lr 2e-5 \
+        --epochs 20 \
+        --lr 3e-5 \
         --stage 1 \
         --window_size 1 \
         --weight_decay 5e-3 \
-        --min_lr_ratio 0.2 \
-        --warmup_ratio 0.1 
+        --min_lr_ratio 1.0 \
+        --warmup_ratio 0.2 
 
     if [ $? -ne 0 ]; then
         echo "An error occurred. Terminating."
@@ -81,17 +102,18 @@ if [ $TRAIN = True ]; then
         --dev_dataset $DS_DEV_PATH \
         --task "audio_only" \
         --epochs 15 \
-        --lr 2e-4 \
+        --lr 1e-5 \
         --stage 2 \
         --window_size 1 \
-        --weight_decay 1e-3 \
+        --weight_decay 0.01 \
         --train_llm \
-        --lora_dim 16 \
+        --lora_dim 8 \
         --lora_alpha 16 \
-        --lora_dropout 0.05 \
+        --lora_dropout 0.25 \
         --lora_module_name ".*?[qkv]_proj" \
-        --min_lr_ratio 0.2 \
-        --warmup_ratio 0.1 
+        --min_lr_ratio 0.8 \
+        --warmup_ratio 0.2 \
+        --do_auxilary_task
 
     if [ $? -ne 0 ]; then
         echo "An error occurred. Terminating."
@@ -113,13 +135,13 @@ if [ $TRAIN = True ]; then
         --test_dataset $DS_TEST_PATH \
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
-        --epochs 10 \
+        --epochs 5 \
         --lr 1e-5 \
         --train_llm \
         --stage 3 \
         --window_size $WINDOW \
-        --weight_decay 1e-3 \
-        --min_lr_ratio 0.2 \
+        --weight_decay 1e-2 \
+        --min_lr_ratio 0.1 \
         --warmup_ratio 0.1 
 
     if [ $? -ne 0 ]; then
@@ -131,7 +153,7 @@ if [ $TRAIN = True ]; then
 
 fi
 
-if [ $TEST = True ]; then
+if [ "$TEST" = "True" ]; then
 
     echo "Running evaluation"
     python ./run_scripts/main_concat.py \
@@ -143,4 +165,33 @@ if [ $TEST = True ]; then
         --test_dataset $DS_TEST_PATH \
         --window_size $WINDOW \
         --batch_size 1
+fi
+
+if [ "$ABLATION" = "True" ]; then
+
+    echo "Running ablation"
+    python ./run_scripts/main_concat.py \
+        --evaluation \
+        --llm_id $LANGUAGE_MODEL \
+        --acoustic_id $ACOUSTIC_MODEL \
+        --adapter_id $LORA_ADAPTER \
+        --output_path $stage_1_path \
+        --test_dataset $DS_TEST_PATH \
+        --dev_dataset $DS_DEV_PATH \
+        --window_size $WINDOW \
+        --task "audio_only" \
+        --batch_size 8
+    
+    
+    python ./run_scripts/main_concat.py \
+        --evaluation \
+        --llm_id $LANGUAGE_MODEL \
+        --acoustic_id $ACOUSTIC_MODEL \
+        --adapter_id $LORA_ADAPTER \
+        --output_path $stage_1_path \
+        --test_dataset $DS_TEST_PATH \
+        --dev_dataset $DS_DEV_PATH \
+        --window_size $WINDOW \
+        --task "normal" \
+        --batch_size 8
 fi
