@@ -10,7 +10,7 @@ WINDOW=12
 dataset="iemocap"
 model="LLaMA2-base"
 
-experiment="late_fusion/$dataset/$model/linear/simple_gate"
+experiment="late_fusion/$dataset/$model/linear/final2"
 
 LANGUAGE_MODEL="/home/fock/code/MultiModalInstructERC/models/language/$model"
 LORA_ADAPTER="/home/fock/code/MultiModalInstructERC/models/language/adapter/$dataset/$model"
@@ -33,6 +33,7 @@ else
     exit 1
 fi
 
+
 stage_1_path=$OUTPUT_PATH"stage_1/"
 stage_2_path=$OUTPUT_PATH"stage_2/"
 stage_3_path=$OUTPUT_PATH"stage_3/"
@@ -40,7 +41,6 @@ stage_3_path=$OUTPUT_PATH"stage_3/"
 output_path=$stage_3_path
 
 if [ $TRAIN = True ]; then
-
     echo "Running stage 1"
     accelerate launch ./run_scripts/main_late_fusion.py \
         --batch_size 8 \
@@ -53,13 +53,14 @@ if [ $TRAIN = True ]; then
         --test_dataset $DS_TEST_PATH \
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
-        --epochs 3 \
-        --lr 2e-5 \
+        --epochs 15 \
+        --lr 2e-4 \
         --min_lr_ratio 0.2 \
         --warmup_ratio 0.1 \
-        --weight_decay 1e-3 \
+        --weight_decay 1e-4 \
         --stage 1 \
-        --window_size $WINDOW
+        --window_size $WINDOW \
+    
 
     if [ $? -ne 0 ]; then
         echo "An error occurred. Terminating."
@@ -81,22 +82,22 @@ if [ $TRAIN = True ]; then
         --test_dataset $DS_TEST_PATH \
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
-        --epochs 15 \
-        --lr 2e-4 \
+        --epochs 3 \
+        --lr 2e-5 \
         --min_lr_ratio 0.2 \
         --warmup_ratio 0.1 \
         --weight_decay 1e-3 \
         --stage 2 \
         --window_size $WINDOW \
-        --resume_training
 
     if [ $? -ne 0 ]; then
         echo "An error occurred. Terminating."
         exit 1
     fi
 
-    output_path=$stage_2_path
-
+    output_path=$stage_2_path    
+    
+    
     echo "Running stage 3"
     accelerate launch ./run_scripts/main_late_fusion.py \
         --batch_size 8 \
@@ -116,14 +117,15 @@ if [ $TRAIN = True ]; then
         --warmup_ratio 0.1 \
         --weight_decay 1e-3 \
         --stage 3 \
-        --window_size $WINDOW
+        --window_size $WINDOW \
 
     if [ $? -ne 0 ]; then
         echo "An error occurred. Terminating."
         exit 1
     fi
 
-    output_path=$stage_3_path
+    output_path=$stage_3_path    
+
 
 fi
 
@@ -158,7 +160,7 @@ if [ $ABLATION = True ]; then
         --dev_dataset $DS_DEV_PATH \
         --window_size $WINDOW \
         --batch_size 8 \
-        --ignore_audio
+        --ignore_text
 
     python run_scripts/main_late_fusion.py \
         --evaluation \
@@ -170,6 +172,6 @@ if [ $ABLATION = True ]; then
         --dev_dataset $DS_DEV_PATH \
         --window_size $WINDOW \
         --batch_size 8 \
-        --ignore_text
+        --ignore_audio
 
 fi
