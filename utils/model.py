@@ -1,4 +1,4 @@
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Union
 
@@ -13,7 +13,6 @@ from transformers.models.wav2vec2.modeling_wav2vec2 import (
     Wav2Vec2PreTrainedModel,
 )
 from transformers.models.llama.modeling_llama import LlamaRMSNorm
-from pytorch_metric_learning import losses
 
 
 class ClassificationHead(nn.Module):
@@ -474,23 +473,14 @@ class MmLlamaMerge(MmLlamaConcat):
         config: MmLlamaConfig,
         train_llm: bool = False,
         alpha: float = 1.0,
-        aux_scalar: float = 0.5,
+        aux_scalar: float = 1.0,
     ) -> None:
         super(MmLlamaMerge, self).__init__(config, train_llm)
-        self.alpha = nn.Parameter(torch.tensor([alpha]))
+        self.alpha = nn.Parameter(torch.tensor(alpha))
         self.aux_scalar = aux_scalar
-        self.temp_aux = aux_scalar
 
         self.projector = ModalityProjector(1024, 4096)
 
-    def eval(self, *args, **kwargs):
-        super().eval(*args, **kwargs)
-        self.temp_aux = self.aux_scalar
-        self.aux_scalar = 0.5
-
-    def train(self, *args, **kwargs):
-        super().train(*args, **kwargs)
-        self.aux_scalar = self.temp_aux
 
     def freeze_scaling(self):
         self.alpha.requires_grad = False

@@ -39,11 +39,11 @@ stage_3_path=$OUTPUT_PATH"stage_3/"
 
 output_path=$stage_3_path
 
-if [ $TEST_ONLY = False ]; then
+if [ "$TRAIN" = "True" ]; then
     echo "Running stage 1"
     accelerate launch ./run_scripts/main_merge.py \
-        --batch_size 2 \
-        --gradient_accumulation_steps 16 \
+        --batch_size 8 \
+        --gradient_accumulation_steps 4 \
         --llm_id $LANGUAGE_MODEL \
         --acoustic_id $ACOUSTIC_MODEL \
         --adapter_id $LORA_ADAPTER \
@@ -53,13 +53,12 @@ if [ $TEST_ONLY = False ]; then
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
         --epochs 20 \
-        --lr 2e-4 \
-        --weight_decay 1e-3 \
+        --lr 2e-5 \
+        --weight_decay 0.0 \
         --min_lr_ratio 0.5 \
-        --alpha 1.0 \
+        --warmup_ratio 0.4 \
         --stage 1 \
-        --resume_training \
-        --window_size $WINDOW
+        --window_size 1
 
     if [ $? -ne 0 ]; then
         echo "An error occurred. Terminating."
@@ -81,19 +80,22 @@ if [ $TEST_ONLY = False ]; then
         --test_dataset $DS_TEST_PATH \
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
-        --epochs 20 \
-        --lr 2e-4 \
-        --min_lr_ratio 0.2 \
         --stage 2 \
-        --window_size $WINDOW \
+        --window_size 1 \
         --train_llm \
-        --lora_dim 16 \
-        --lora_alpha 32 \
-        --lora_dropout 0.1 \
-        --lora_module_name ".*?[qkvo]_proj" \
-        --resume_training
-    # --time_till_aux 10 \
+        --epochs 15 \
+        --lr 1e-5 \
+        --warmup_ratio 0.4 \
+        --weight_decay 0.01 \
+        --window_size 1 \
+        --train_llm \
+        --lora_dim 8 \
+        --lora_alpha 16 \
+        --lora_dropout 0.25 \
+        --lora_module_name ".*?[qkv]_proj" \
+        --min_lr_ratio 0.8 \
         --do_auxiliary_task \
+        --time_till_aux 6
 
     if [ $? -ne 0 ]; then
         echo "An error occurred. Terminating."
@@ -102,8 +104,8 @@ if [ $TEST_ONLY = False ]; then
 
     echo "Running stage 3"
     accelerate launch ./run_scripts/main_merge.py \
-        --batch_size 2 \
-    --gradient_accumulation_steps 16 \
+        --batch_size 8 \
+        --gradient_accumulation_steps 4 \
         --llm_id $LANGUAGE_MODEL \
         --acoustic_id $ACOUSTIC_MODEL \
         --adapter_id $LORA_ADAPTER \
@@ -115,12 +117,10 @@ if [ $TEST_ONLY = False ]; then
         --task "normal" \
         --epochs 20 \
         --lr 2e-4 \
-        --min_lr_ratio 0.5 \
+        --min_lr_ratio 0.1 \
+        --warmup_ratio 0.1 \
         --stage 3 \
         --window_size $WINDOW
-    # --resume_training
-
-    output_path=$stage_2_path
 
     if [ $? -ne 0 ]; then
         echo "An error occurred. Terminating."
@@ -131,7 +131,7 @@ if [ $TEST_ONLY = False ]; then
 
 fi
 
-if [ $TEST = True ]; then
+if [ "$TEST" = "True" ]; then
 
     echo "Running evaluation"
     python run_scripts/main_merge.py \

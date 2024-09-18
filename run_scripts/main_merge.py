@@ -78,7 +78,6 @@ class Args:
     resume_training: bool = False
     window_size: int = 5
     time_till_aux: int = epochs
-    alpha: float = 1.0
     do_auxiliary_task: bool = False
     seed: int = 42
 
@@ -113,7 +112,6 @@ def parse_args():
     parser.add_argument("--lora_module_name", type=str, default=".*?[qkvo]_proj")
     parser.add_argument("--resume_training", action="store_true")
     parser.add_argument("--time_till_aux", type=int, default=15)
-    parser.add_argument("--alpha", type=float, default=1.0)
     parser.add_argument("--do_auxiliary_task", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -218,9 +216,10 @@ def load_model_for_stage(
 
 def _load_model_for_stage_1(model: MmLlamaMerge):
     """Load model for stage 1 training (Projector training)"""
-
+    model.aux_scalar = 0.0
     def execute_after_prepare(model: MmLlamaMerge):
         model.freeze_encoder(train_norm=True)
+        model.freeze_scaling()
         return model
 
     return model, execute_after_prepare
@@ -230,12 +229,12 @@ def _load_model_for_stage_2(model: MmLlamaMerge):
     model.load_state_dict(
         torch.load(os.path.join(args.checkpoint_path, "best_model.pth")), strict=False
     )
+    model.aux_scalar = 0.0
     lora_config = LoraConfig(
         r=args.lora_dim,
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
         target_modules=args.lora_module_name,
-        use_rslora=True,
         bias="none",
     )
     model = model.apply_training_lora(lora_config)
@@ -302,6 +301,7 @@ def setup_config_and_processor():
         audio_end_token_id=audio_end_token_id,
         pad_token_id=tokenizer.pad_token_id,
         llm_pretrained_adapter=args.adapter_id,
+        num_labels=0
     )
 
     return tokenizer, processor, config
@@ -348,7 +348,7 @@ def train():
         collate_fn=SequenceGenerationCollator(processor, mode="train"),
     )
     # get model
-    model = MmLlamaMerge(config, train_llm=args.train_llm, alpha=args.alpha)
+    model = MmLlamaMerge(config, train_llm=args.train_llm)
     model, execute_after_prepare = load_model_for_stage(model, args.stage)
 
     # setup optimizer
@@ -496,37 +496,19 @@ def _set_stage_1_changes(model: MmLlamaMerge, epoch: int, **_):
     pass
 
 
-stage_2_wait_counter = 3
-
 
 def _set_stage_2_changes(
     model: MmLlamaMerge,
-    train_losses: list[float],
-    eval_losses: list[float],
     epoch: int,
     **_,
 ):
-    window = 3
+    if epoch == args.time_till_aux:
+        model.unfreeze_projector()
+    if epoch >= args.time_till_aux:
+        model.aux_scalar = min(1.0, (epoch - args.time_till_aux) / (args.epochs - args.time_till_aux))
 
-    def mean_gradient(losses: list[float], window_size: int) -> float:
-        if len(losses) < window_size:
-            return 0.0
-        return np.mean(np.diff(losses[-window_size:]))
-
-    global stage_2_wait_counter
-    if stage_2_wait_counter > 0:
-        stage_2_wait_counter -= 1
-        return
-
-    train_gradient = mean_gradient(train_losses, window)
-    eval_gradient = mean_gradient(eval_losses, window)
-
-    if train_gradient < 0 and eval_gradient > 0.02:
-        stage_2_wait_counter = window
-        model.aux_scalar = 0.25 * (1 + math.cos(math.pi * (epoch / args.epochs) * 2))
-        print(
-            f"Setting aux_scalar to {model.aux_scalar}: input_embeds * {model.aux_scalar}, acoustic * {1 - model.aux_scalar}"
-        )
+    print(f"####### text * {model.aux_scalar / 2}, audio * {1 - model.aux_scalar / 2} #######")
+   
 
 
 def save_model(accelerator: Accelerator, tokenizer, model):
