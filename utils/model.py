@@ -600,8 +600,11 @@ class MmLlamaMerge(MmLlamaConcat):
         input_attention_mask: torch.Tensor,
         labels: Union[torch.Tensor, None],
     ) -> Dict[str, torch.Tensor]:
-        output_embeds = inputs_embeds * self.aux_scalar + (
-            audio_features * self.alpha * (1 - self.aux_scalar)
+        aux_scalar = max(0, min(2, self.aux_scalar)) / 2
+        mask = torch.ones_like(inputs_embeds, dtype=torch.float)
+        mask[audio_features.abs().sum(dim=2) > 0] = aux_scalar
+        output_embeds = inputs_embeds * mask + (
+            audio_features * self.alpha * (1 - aux_scalar)
         )
         output_embeds = (
             output_embeds / (torch.norm(output_embeds, dim=2, keepdim=True) + 1e-6)

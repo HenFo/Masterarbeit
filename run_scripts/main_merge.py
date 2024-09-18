@@ -4,7 +4,6 @@ import os
 import sys
 from dataclasses import dataclass
 from typing import Callable, Type
-import numpy as np
 
 import torch
 from accelerate import Accelerator
@@ -617,7 +616,7 @@ def test():
 
     test_dataloader_f1 = DataLoader(
         test_dataset,
-        batch_size=args.batch_size,
+        batch_size=1,
         shuffle=False,
         num_workers=8,
         collate_fn=SequenceGenerationCollator(processor, mode="dev"),
