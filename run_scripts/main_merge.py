@@ -79,8 +79,8 @@ class Args:
     resume_training: bool = False
     window_size: int = 5
     time_till_aux: int = epochs
-    do_auxilary_task: bool = False
     alpha: float = 1.0
+    do_auxiliary_task: bool = False
     seed: int = 42
 
 
@@ -114,8 +114,8 @@ def parse_args():
     parser.add_argument("--lora_module_name", type=str, default=".*?[qkvo]_proj")
     parser.add_argument("--resume_training", action="store_true")
     parser.add_argument("--time_till_aux", type=int, default=15)
-    parser.add_argument("--do_auxilary_task", action="store_true")
     parser.add_argument("--alpha", type=float, default=1.0)
+    parser.add_argument("--do_auxiliary_task", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
     return Args(**vars(args))
@@ -474,8 +474,8 @@ def train():
         )
         accelerator.wait_for_everyone()
 
-        if args.do_auxilary_task:
-            set_auxilary_changes(
+        if args.do_auxiliary_task:
+            set_auxiliary_changes(
                 model=accelerator.unwrap_model(model),
                 train_dataloader=train_dataloader,
                 eval_dataloader=eval_dataloader,
@@ -486,7 +486,7 @@ def train():
             )
 
 
-def set_auxilary_changes(**kwargs):
+def set_auxiliary_changes(**kwargs):
     if args.stage == 1:
         _set_stage_1_changes(**kwargs)
     elif args.stage == 2:

@@ -91,9 +91,9 @@ if [ $TEST_ONLY = False ]; then
         --lora_alpha 32 \
         --lora_dropout 0.1 \
         --lora_module_name ".*?[qkvo]_proj" \
-        --do_auxilary_task \
         --resume_training
     # --time_till_aux 10 \
+        --do_auxiliary_task \
 
     if [ $? -ne 0 ]; then
         echo "An error occurred. Terminating."

@@ -70,7 +70,7 @@ class Args:
     window_size: int = 5
     time_till_aux: int = epochs
     include_target_text_percentage_decay: float = 0.3
-    do_auxilary_task: bool = False
+    do_auxiliary_task: bool = False
     seed: int = 42
 
 
@@ -107,7 +107,7 @@ def parse_args():
     parser.add_argument(
         "--include_target_text_percentage_decay", type=float, default=0.3
     )
-    parser.add_argument("--do_auxilary_task", action="store_true")
+    parser.add_argument("--do_auxiliary_task", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
     return Args(**vars(args))
@@ -444,8 +444,8 @@ def train():
         )
         accelerator.wait_for_everyone()
 
-        if args.do_auxilary_task:
-            set_auxilary_changes(
+        if args.do_auxiliary_task:
+            set_auxiliary_changes(
                 model=accelerator.unwrap_model(model),
                 train_dataloader=train_dataloader,
                 epoch=epoch,
@@ -455,7 +455,7 @@ def train():
             )
 
 
-def set_auxilary_changes(**kwargs):
+def set_auxiliary_changes(**kwargs):
     if args.stage == 1:
         _set_stage_1_changes(**kwargs)
     elif args.stage == 2:
