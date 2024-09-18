@@ -10,7 +10,27 @@ WINDOW=12
 dataset="iemocap"
 model="LLaMA2-base"
 
-experiment="merge/$dataset/$model/mlp"
+experiment_suffix="audio_only_pretraining"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dataset)
+            dataset=$2
+            shift
+            ;;
+        --experiment_suffix)
+            experiment_suffix=$2
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+experiment="merge/final/$dataset/$model/$experiment_suffix"
 
 LANGUAGE_MODEL="/home/fock/code/MultiModalInstructERC/models/language/$model"
 LORA_ADAPTER="/home/fock/code/MultiModalInstructERC/models/language/adapter/$dataset/$model"
