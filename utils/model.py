@@ -472,21 +472,22 @@ class MmLlamaMerge(MmLlamaConcat):
         self,
         config: MmLlamaConfig,
         train_llm: bool = False,
-        alpha: float = 1.0,
         aux_scalar: float = 1.0,
     ) -> None:
         super(MmLlamaMerge, self).__init__(config, train_llm)
-        self.alpha = nn.Parameter(torch.tensor(alpha))
         self.aux_scalar = aux_scalar
+        self.alpha = nn.Parameter(torch.tensor(1.0))
+        self.beta = nn.Parameter(torch.tensor(1.0))
 
         self.projector = ModalityProjector(1024, 4096)
 
-
     def freeze_scaling(self):
         self.alpha.requires_grad = False
+        self.beta.requires_grad = False
 
     def unfreeze_scaling(self):
         self.alpha.requires_grad = True
+        self.beta.requires_grad = True
 
     def _get_inputs(
         self,
@@ -590,15 +591,20 @@ class MmLlamaMerge(MmLlamaConcat):
         input_attention_mask: torch.Tensor,
         labels: Union[torch.Tensor, None],
     ) -> Dict[str, torch.Tensor]:
-        aux_scalar = max(0, min(2, self.aux_scalar)) / 2
-        mask = torch.ones_like(inputs_embeds, dtype=torch.float)
-        mask[audio_features.abs().sum(dim=2) > 0] = aux_scalar
+        def scale_to_norm(embeds_to_scale:torch.Tensor, embeds_to_target:torch.Tensor) -> torch.Tensor:
+            return embeds_to_scale / (
+                torch.norm(embeds_to_scale, dim=2, keepdim=True) + 1e-6
+            ) * torch.norm(embeds_to_target, dim=2, keepdim=True)
+
+        mask = torch.ones_like(inputs_embeds, dtype=self.alpha.dtype)
+        mask[audio_features.abs().sum(dim=2) > 0] = self.alpha * self.aux_scalar
+
+        audio_features = scale_to_norm(audio_features, inputs_embeds)
+
         output_embeds = inputs_embeds * mask + (
-            audio_features * self.alpha * (1 - aux_scalar)
+            audio_features * self.beta * (1 - self.aux_scalar)
         )
-        output_embeds = (
-            output_embeds / (torch.norm(output_embeds, dim=2, keepdim=True) + 1e-6)
-        ) * torch.norm(inputs_embeds, dim=2, keepdim=True)
+        # output_embeds = scale_to_norm(output_embeds, inputs_embeds)
 
         def remove_audio_tokens(vector_sequence: torch.Tensor):
             audio_tokens = (input_ids == self.config.audio_token_id) | (

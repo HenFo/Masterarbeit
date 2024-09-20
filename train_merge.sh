@@ -10,7 +10,7 @@ WINDOW=12
 dataset="iemocap"
 model="LLaMA2-base"
 
-experiment_suffix="audio_only_pretraining"
+experiment_suffix="audio_only_pretraining2"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -73,7 +73,7 @@ if [ "$TRAIN" = "True" ]; then
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
         --epochs 20 \
-        --lr 2e-5 \
+        --lr 1e-4 \
         --weight_decay 0.0 \
         --min_lr_ratio 0.5 \
         --warmup_ratio 0.4 \
@@ -106,26 +106,32 @@ if [ "$TRAIN" = "True" ]; then
         --epochs 15 \
         --lr 1e-5 \
         --warmup_ratio 0.4 \
-        --weight_decay 0.01 \
+        --weight_decay 0.005 \
         --window_size 1 \
         --train_llm \
         --lora_dim 8 \
         --lora_alpha 16 \
-        --lora_dropout 0.25 \
+        --lora_dropout 0.5 \
         --lora_module_name ".*?[qkv]_proj" \
-        --min_lr_ratio 0.8 \
+        --min_lr_ratio 0.5 \
         --do_auxiliary_task \
-        --time_till_aux 6
+        --time_till_aux 5
 
     if [ $? -ne 0 ]; then
         echo "An error occurred. Terminating."
         exit 1
     fi
 
+    echo "Copying adapter files from stage 2 to stage 3"
+    mkdir -p $stage_3_path
+    for file in $(ls $stage_2_path | grep "^adapter"); do
+        cp $stage_2_path/$file $stage_3_path
+    done
+
     echo "Running stage 3"
     accelerate launch ./run_scripts/main_merge.py \
-        --batch_size 8 \
-        --gradient_accumulation_steps 4 \
+        --batch_size 2 \
+        --gradient_accumulation_steps 16 \
         --llm_id $LANGUAGE_MODEL \
         --acoustic_id $ACOUSTIC_MODEL \
         --adapter_id $LORA_ADAPTER \
@@ -135,8 +141,8 @@ if [ "$TRAIN" = "True" ]; then
         --test_dataset $DS_TEST_PATH \
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
-        --epochs 20 \
-        --lr 2e-4 \
+        --epochs 10 \
+        --lr 1e-4 \
         --min_lr_ratio 0.1 \
         --warmup_ratio 0.1 \
         --stage 3 \

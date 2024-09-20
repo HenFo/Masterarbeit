@@ -258,8 +258,6 @@ def _load_model_for_stage_3(model: MmLlamaMerge):
     )
 
     def execute_after_prepare(model: MmLlamaMerge):
-        model.unfreeze_scaling()
-        model.freeze_projector()
         model.freeze_encoder(train_norm=False)
         return model
 
@@ -502,12 +500,11 @@ def _set_stage_2_changes(
     epoch: int,
     **_,
 ):
-    if epoch == args.time_till_aux:
-        model.unfreeze_projector()
-    if epoch >= args.time_till_aux:
-        model.aux_scalar = min(1.0, (epoch - args.time_till_aux) / (args.epochs - args.time_till_aux))
+    epoch -= 1
+    if epoch % 2 == 0 and epoch >= args.time_till_aux:
+        model.aux_scalar = min(1.0, (epoch - args.time_till_aux) / (args.epochs - args.time_till_aux)) / 2
 
-    print(f"####### text * {model.aux_scalar / 2}, audio * {1 - model.aux_scalar / 2} #######")
+    print(f"####### text * {(model.aux_scalar):.2f}, audio * {(1 - model.aux_scalar):.2f} #######")
    
 
 
