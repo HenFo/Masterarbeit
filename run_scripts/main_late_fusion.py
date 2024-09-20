@@ -35,7 +35,6 @@ from utils.dataset import ERCDataset, IemocapDataset, MeldDataset
 import argparse
 
 import torch.nn as nn
-from peft import LoraConfig
 
 
 # LANGUAGE_MODEL = "/home/fock/code/MultiModalInstructERC/models/language/LLaMA2"
@@ -315,6 +314,7 @@ def train():
     # get model
     model = MmLlamaForSequenceClassification(config)
     model, execute_after_prepare = load_model_for_stage(model, args.stage)
+    model.print_trainable_parameters()
 
     # setup optimizer
     grouped_parameters = get_grouped_parameters(model)
@@ -652,7 +652,7 @@ def evaluate_f1(
 
 
 def evaluate_loss(
-    model: MmLlamaConcat,
+    model: MmLlamaForSequenceClassification,
     dataloader: DataLoader,
 ) -> float:
     eval_batch_iterator = tqdm(dataloader, total=len(dataloader), desc="Evaluating")

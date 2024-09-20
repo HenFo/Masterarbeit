@@ -321,6 +321,7 @@ def train():
     # get model
     model = MmLlamaConcat(config, train_llm=args.train_llm)
     model, execute_after_prepare = load_model_for_stage(model, args.stage)
+    model.print_trainable_parameters()
 
     # setup optimizer
     grouped_parameters = get_grouped_parameters(model)

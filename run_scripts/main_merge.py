@@ -124,26 +124,6 @@ print(args)
 
 set_seed(args.seed)
 
-# args = Args(
-#     batch_size=2,
-#     gradient_accumulation_steps=16,
-#     llm_id=LANGUAGE_MODEL,
-#     acoustic_id=ACOUSTIC_MODEL,
-#     adapter_id=LORA_ADAPTER,
-#     output_path=OUTPUT_PATH,
-#     checkpoint_path="/home/fock/code/MultiModalInstructERC/experiments/multimodal/mlp/concat/interpolate/stage_1",
-#     train_dataset=DS_TRAIN_PATH,
-#     test_dataset=DS_TEST_PATH,
-#     dev_dataset=DS_DEV_PATH,
-#     task="normal",
-#     deepspeed_config="deepspeed_config.json",
-#     epochs=7,
-#     lr=1e-5,
-#     train_llm=True,
-#     resume_training=False,
-#     stage=1
-# )
-
 
 def get_grouped_parameters(model):
     no_decay = ["bias", "norm.weight"]
@@ -202,7 +182,7 @@ def load_tokenizer():
 
 
 def load_model_for_stage(
-    model: nn.Module, stage: int
+    model:MmLlamaMerge, stage: int
 ) -> tuple[MmLlamaMerge, Callable[[MmLlamaMerge], MmLlamaMerge]]:
     if stage == 1:
         return _load_model_for_stage_1(model)
@@ -367,6 +347,7 @@ def train():
     )
 
     model = execute_after_prepare(model)
+    model.print_trainable_parameters()
 
     accelerator.register_for_checkpointing(lr_scheduler)
 
@@ -475,7 +456,6 @@ def train():
             set_auxiliary_changes(
                 model=accelerator.unwrap_model(model),
                 train_dataloader=train_dataloader,
-                eval_dataloader=eval_dataloader,
                 epoch=epoch,
                 best_loss=best_eval_loss,
                 eval_losses=eval_losses,
