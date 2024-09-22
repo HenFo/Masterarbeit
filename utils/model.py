@@ -596,15 +596,15 @@ class MmLlamaMerge(MmLlamaConcat):
                 torch.norm(embeds_to_scale, dim=2, keepdim=True) + 1e-6
             ) * torch.norm(embeds_to_target, dim=2, keepdim=True)
 
-        mask = torch.ones_like(inputs_embeds, dtype=self.alpha.dtype)
-        mask[audio_features.abs().sum(dim=2) > 0] = self.alpha * self.aux_scalar
+        text_mask = torch.ones_like(inputs_embeds, dtype=self.alpha.dtype)
+        text_mask[torch.where(audio_features)] = self.alpha * self.aux_scalar
+        audio_mask = torch.ones_like(inputs_embeds, dtype=self.beta.dtype)
+        audio_mask[torch.where(audio_features)] = self.beta * (1 - self.aux_scalar)
 
         audio_features = scale_to_norm(audio_features, inputs_embeds)
 
-        output_embeds = inputs_embeds * mask + (
-            audio_features * self.beta * (1 - self.aux_scalar)
-        )
-        # output_embeds = scale_to_norm(output_embeds, inputs_embeds)
+        output_embeds = inputs_embeds * text_mask + audio_features * audio_mask
+        output_embeds = scale_to_norm(output_embeds, inputs_embeds)
 
         def remove_audio_tokens(vector_sequence: torch.Tensor):
             audio_tokens = (input_ids == self.config.audio_token_id) | (
@@ -658,7 +658,6 @@ class GatingLayer(nn.Module):
         hidden_size = text_dim + audio_dim
         self.hidden1 = nn.Linear(hidden_size, hidden_size)
         self.hidden2 = nn.Linear(hidden_size, hidden_size)
-        self.hidden3 = nn.Linear(hidden_size, hidden_size)
         self.fc = nn.Linear(hidden_size, 2)
         self.ac = nn.SiLU()
         self.dropout = nn.Dropout(0.3)
@@ -777,7 +776,7 @@ class MmLlamaForSequenceClassification(MmLlama):
 
         else:
             gate = torch.relu(gate)
-            logits = text_pred * gate[:, 0, None] + audio_pred * gate[:, 1, None]
+            logits = torch.softmax(text_pred, dim=1) * gate[:, 0, None] + torch.softmax(audio_pred, dim=1) * gate[:, 1, None]
             # logits = self.classifier(self.dropout(merged))
             if labels is not None:
                 loss_fct = nn.CrossEntropyLoss(reduction="none")
@@ -797,7 +796,7 @@ class MmLlamaForSequenceClassification(MmLlama):
                     + only_audio_correct * 1.0
                 )
                 main_loss = torch.mean(main_loss * weights.detach())
-                loss = main_loss + (text_loss.mean() + audio_loss.mean()) * 0.1
+                loss = main_loss # + (text_loss.mean() + audio_loss.mean()) * 0.1
 
         if gate_loss is not None:
             loss = loss + gate_loss

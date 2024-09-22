@@ -57,7 +57,7 @@ stage_1_path=$OUTPUT_PATH"stage_1/"
 stage_2_path=$OUTPUT_PATH"stage_2/"
 stage_3_path=$OUTPUT_PATH"stage_3/"
 
-output_path=$stage_3_path
+output_path=$stage_2_path
 
 if [ "$TRAIN" = "True" ]; then
     echo "Running stage 1"
@@ -73,10 +73,10 @@ if [ "$TRAIN" = "True" ]; then
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
         --epochs 20 \
-        --lr 1e-4 \
-        --weight_decay 0.0 \
-        --min_lr_ratio 0.5 \
-        --warmup_ratio 0.4 \
+        --lr 3e-5 \
+        --weight_decay 5e-3 \
+        --min_lr_ratio 1.0 \
+        --warmup_ratio 0.2 \
         --stage 1 \
         --window_size 1
 
@@ -103,57 +103,60 @@ if [ "$TRAIN" = "True" ]; then
         --stage 2 \
         --window_size 1 \
         --train_llm \
-        --epochs 15 \
+        --epochs 20 \
         --lr 1e-5 \
-        --warmup_ratio 0.4 \
-        --weight_decay 0.005 \
+        --warmup_ratio 0.3 \
+        --weight_decay 5e-3 \
         --window_size 1 \
         --train_llm \
-        --lora_dim 8 \
+        --lora_dim 4 \
         --lora_alpha 16 \
-        --lora_dropout 0.5 \
+        --lora_dropout 0.3 \
         --lora_module_name ".*?[qkv]_proj" \
         --min_lr_ratio 0.5 \
         --do_auxiliary_task \
-        --time_till_aux 5
+        --time_till_aux 5 \
+        --ignore_loss_till 13
 
     if [ $? -ne 0 ]; then
         echo "An error occurred. Terminating."
         exit 1
     fi
 
-    echo "Copying adapter files from stage 2 to stage 3"
-    mkdir -p $stage_3_path
-    for file in $(ls $stage_2_path | grep "^adapter"); do
-        cp $stage_2_path/$file $stage_3_path
-    done
+    output_path=$stage_2_path
 
-    echo "Running stage 3"
-    accelerate launch ./run_scripts/main_merge.py \
-        --batch_size 2 \
-        --gradient_accumulation_steps 16 \
-        --llm_id $LANGUAGE_MODEL \
-        --acoustic_id $ACOUSTIC_MODEL \
-        --adapter_id $LORA_ADAPTER \
-        --output_path $stage_3_path \
-        --checkpoint_path $stage_2_path \
-        --train_dataset $DS_TRAIN_PATH \
-        --test_dataset $DS_TEST_PATH \
-        --dev_dataset $DS_DEV_PATH \
-        --task "normal" \
-        --epochs 10 \
-        --lr 1e-4 \
-        --min_lr_ratio 0.1 \
-        --warmup_ratio 0.1 \
-        --stage 3 \
-        --window_size $WINDOW
+    # echo "Copying adapter files from stage 2 to stage 3"
+    # mkdir -p $stage_3_path
+    # for file in $(ls $stage_2_path | grep "^adapter"); do
+    #     cp $stage_2_path/$file $stage_3_path
+    # done
 
-    if [ $? -ne 0 ]; then
-        echo "An error occurred. Terminating."
-        exit 1
-    fi
+    # echo "Running stage 3"
+    # accelerate launch ./run_scripts/main_merge.py \
+    #     --batch_size 2 \
+    #     --gradient_accumulation_steps 16 \
+    #     --llm_id $LANGUAGE_MODEL \
+    #     --acoustic_id $ACOUSTIC_MODEL \
+    #     --adapter_id $LORA_ADAPTER \
+    #     --output_path $stage_3_path \
+    #     --checkpoint_path $stage_2_path \
+    #     --train_dataset $DS_TRAIN_PATH \
+    #     --test_dataset $DS_TEST_PATH \
+    #     --dev_dataset $DS_DEV_PATH \
+    #     --task "normal" \
+    #     --epochs 20 \
+    #     --lr 1 \
+    #     --min_lr_ratio 0.1 \
+    #     --warmup_ratio 0.1 \
+    #     --stage 3 \
+    #     --window_size $WINDOW
 
-    output_path=$stage_3_path
+    # if [ $? -ne 0 ]; then
+    #     echo "An error occurred. Terminating."
+    #     exit 1
+    # fi
+
+    # output_path=$stage_3_path
 
 fi
 

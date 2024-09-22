@@ -79,6 +79,7 @@ class Args:
     window_size: int = 5
     time_till_aux: int = epochs
     do_auxiliary_task: bool = False
+    ignore_loss_till: int = 0
     seed: int = 42
 
 
@@ -113,6 +114,7 @@ def parse_args():
     parser.add_argument("--resume_training", action="store_true")
     parser.add_argument("--time_till_aux", type=int, default=15)
     parser.add_argument("--do_auxiliary_task", action="store_true")
+    parser.add_argument("--ignore_loss_till", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
     return Args(**vars(args))
@@ -237,8 +239,12 @@ def _load_model_for_stage_3(model: MmLlamaMerge):
         adapter_id=args.checkpoint_path, resume_training=args.train_llm
     )
 
+    # model.alpha.register_hook(lambda grad: print("alpha:", grad))
+    # model.beta.register_hook(lambda grad: print("beta:", grad))
+
     def execute_after_prepare(model: MmLlamaMerge):
         model.freeze_encoder(train_norm=False)
+        model.freeze_projector()
         return model
 
     return model, execute_after_prepare
@@ -419,7 +425,7 @@ def train():
 
             eval_loss = evaluate_train(model, epoch, eval_dataloader)
             eval_losses.append(eval_loss)
-            if eval_loss < best_eval_loss:
+            if eval_loss < best_eval_loss and args.ignore_loss_till < epoch:
                 print("Saving model")
                 best_eval_loss = eval_loss
                 print(f"Best Loss: {best_eval_loss}")
@@ -480,9 +486,13 @@ def _set_stage_2_changes(
     epoch: int,
     **_,
 ):
-    epoch -= 1
+    if epoch == args.time_till_aux:
+        model.unfreeze_scaling()
     if epoch % 2 == 0 and epoch >= args.time_till_aux:
-        model.aux_scalar = min(1.0, (epoch - args.time_till_aux) / (args.epochs - args.time_till_aux)) / 2
+        model.aux_scalar = min(
+            1.0,
+            (epoch - args.time_till_aux) / ((args.epochs - args.time_till_aux) / 2),
+        ) / 2
 
     print(f"####### text * {(model.aux_scalar):.2f}, audio * {(1 - model.aux_scalar):.2f} #######")
    
