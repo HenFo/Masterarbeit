@@ -297,7 +297,8 @@ class ERCDataset(Dataset, ABC):
     
     def _get_audio_only_input(self, dialog: pd.DataFrame) -> dict:
         target = dialog.iloc[-1]
-        audio = self._get_audio(target)
+        corrupt = self._check_audio_corruption(target.name)
+        audio = self._get_audio(target) if not corrupt else None
         instruction = f"Please select the emotional state of the speaker from <{', '.join(self.emotions)}> based on the given audio features:"
         prompt = f"Now you are expert of sentiment and emotional analysis. The following are audio features of one person speaking as part of a conversation, noted between '[' and ']': Audio features: [<audio>] {instruction}"
         return audio, {"input": prompt, "target": target["Emotion"]}
