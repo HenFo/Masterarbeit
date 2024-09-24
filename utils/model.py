@@ -751,16 +751,9 @@ class MmLlamaForSequenceClassification(MmLlama):
                 ],
                 dim=1,
             )
-            weights = torch.zeros_like(
-                gate_target, device=gate_target.device
-            ) + torch.stack(
-                [
-                    torch.ones(gate_target.size(0), device=gate_target.device),
-                    gate_target[:, 1] * 1.5 + 0.3,
-                ],
-                dim=1,
-            )
-            gate_loss = nn.BCEWithLogitsLoss(pos_weight=weights)(
+            # weights = torch.ones_like(gate_target, device=gate_target.device)
+            
+            gate_loss = nn.BCEWithLogitsLoss()(
                 gate, gate_target.detach()
             )
 
@@ -776,7 +769,7 @@ class MmLlamaForSequenceClassification(MmLlama):
 
         else:
             gate = torch.relu(gate)
-            logits = torch.softmax(text_pred, dim=1) * gate[:, 0, None] + torch.softmax(audio_pred, dim=1) * gate[:, 1, None]
+            logits =  text_pred * gate[:, 0, None] + audio_pred * gate[:, 1, None]
             # logits = self.classifier(self.dropout(merged))
             if labels is not None:
                 loss_fct = nn.CrossEntropyLoss(reduction="none")
@@ -793,7 +786,7 @@ class MmLlamaForSequenceClassification(MmLlama):
                 )
                 weights = (
                     torch.ones_like(main_loss, device=main_loss.device)
-                    + only_audio_correct * 1.0
+                    + only_audio_correct * 0.5
                 )
                 main_loss = torch.mean(main_loss * weights.detach())
                 loss = main_loss # + (text_loss.mean() + audio_loss.mean()) * 0.1

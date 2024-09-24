@@ -228,7 +228,6 @@ def _load_model_for_stage_3(model: MmLlamaForSequenceClassification):
     return model, execute_after_prepare
 
 
-
 def load_model_for_test(model: MmLlamaForSequenceClassification):
     model.load_state_dict(
         torch.load(os.path.join(args.output_path, "best_model.pth")), strict=False
@@ -283,7 +282,6 @@ def train():
         mixed_precision=args.mixed_precision,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
     )
-
 
     ## setup datasets
     train_dataset = dataset_class(args.train_dataset)(
@@ -404,13 +402,6 @@ def train():
                 sampler=SequentialSampler(eval_dataset),
             )
 
-            eval_loss, eval_gate_loss = evaluate_train(model, epoch, eval_dataloader)
-            eval_losses.append(
-                {
-                    "eval_loss": eval_loss,
-                    # "eval_gate_loss": eval_gate_loss
-                }
-            )
             eval_loss = evaluate_train(model, epoch, eval_dataloader)
             eval_losses.append(eval_loss)
             if eval_loss < best_eval_loss:
@@ -598,6 +589,7 @@ def evaluate_f1(
 
     def gate_hook(module, inputs, outputs):
         all_gates.extend(outputs.cpu())
+
     model.gate.register_forward_hook(gate_hook)
 
     running_loss = 0.0
@@ -632,14 +624,16 @@ def evaluate_f1(
 
     f1 = f1_score(all_targets, all_preds, average="weighted")
     preds_for_eval = []
-    for i, (inp, pred, target, cert) in enumerate(zip(all_inputs, all_preds, all_targets, all_preds_cert)):
+    for i, (inp, pred, target, cert) in enumerate(
+        zip(all_inputs, all_preds, all_targets, all_preds_cert)
+    ):
         preds_for_eval.append(
             {
                 "index": i,
                 "input": inp,
                 "output": pred,
                 "target": target,
-                "certainty": cert
+                "certainty": cert,
             }
         )
     suffix = (
