@@ -655,14 +655,16 @@ class LateFusionProjector(nn.Module):
 class GatingLayer(nn.Module):
     def __init__(self, text_dim: int, audio_dim: int):
         super(GatingLayer, self).__init__()
-        hidden_size = text_dim + audio_dim
-        self.hidden = nn.Linear(hidden_size, hidden_size)
+        merged_size = text_dim + audio_dim
+        self.hidden = nn.Linear(merged_size, merged_size)
         self.ac = nn.SiLU()
-        self.fc = nn.Linear(hidden_size, 2)
+        self.fc = nn.Linear(merged_size, 2)
         self.dropout = nn.Dropout(0.3)
+        self.text_dropout = nn.Dropout(0.4)
+        self.audio_dropout = nn.Dropout(0.2)
 
     def forward(self, text: torch.Tensor, audio: torch.Tensor):
-        gated = self.ac(self.hidden(self.dropout(torch.cat([text, audio], dim=-1))))
+        gated = self.ac(self.hidden(torch.cat([self.text_dropout(text), self.audio_dropout(audio)], dim=-1)))
         return self.fc(self.dropout(gated))
 
 
@@ -706,13 +708,12 @@ class MmLlamaForSequenceClassification(MmLlama):
         self.classifier = nn.Linear(
             self.output_projection_size, config.num_labels, bias=False
         )
-        self.dropout = nn.Dropout(0.3)
+        self.dropout = nn.Dropout(0.6)
         self.norm = LlamaRMSNorm(self.output_projection_size)
 
         self.ignore_acoustic = False
         self.ignore_text = False
 
-        self.use_gate = True
 
     @torch.autocast(device_type="cuda")
     def forward(
