@@ -43,10 +43,17 @@ if [ $dataset = "meld" ]; then
     DS_DEV_PATH="$DS_BASE/dev_sent_emo.csv"
     DS_TEST_PATH="$DS_BASE/test_sent_emo.csv"
 
+    stage_1_lr=1e-4
+    stage_1_weight_decay=1e-2
+
 elif [ $dataset = "iemocap" ]; then
     DS_TRAIN_PATH="$DS_BASE/iemocap.csv"
     DS_DEV_PATH="$DS_BASE/iemocap.csv"
     DS_TEST_PATH="$DS_BASE/iemocap.csv"
+
+    stage_1_lr=2e-4
+    stage_1_weight_decay=1e-4
+
 
 else
     echo "Invalid dataset"
@@ -60,7 +67,7 @@ stage_3_path=$OUTPUT_PATH"stage_3/"
 
 output_path=$stage_3_path
 
-if [ $TRAIN = True ]; then
+if [ "$TRAIN" = "True" ]; then
     echo "Running stage 1"
     accelerate launch ./run_scripts/main_late_fusion.py \
         --batch_size 8 \
@@ -133,9 +140,9 @@ if [ $TRAIN = True ]; then
         --task "normal" \
         --epochs 10 \
         --lr 2e-5 \
-        --min_lr_ratio 0.2 \
+        --min_lr_ratio 0.5 \
         --warmup_ratio 0.1 \
-        --weight_decay 1e-3 \
+        --weight_decay 8e-2 \
         --stage 3 \
         --window_size $WINDOW \
 
@@ -149,7 +156,7 @@ if [ $TRAIN = True ]; then
 
 fi
 
-if [ $TEST = True ]; then
+if [ "$TEST" = "True" ]; then
 
     echo "Running evaluation"
     python run_scripts/main_late_fusion.py \
@@ -165,7 +172,7 @@ if [ $TEST = True ]; then
 
 fi
 
-if [ $ABLATION = True ]; then
+if [ "$ABLATION" = "True" ]; then
 
     output_path=$stage_3_path
 
