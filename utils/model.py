@@ -659,9 +659,9 @@ class GatingLayer(nn.Module):
         self.hidden = nn.Linear(merged_size, merged_size)
         self.ac = nn.SiLU()
         self.fc = nn.Linear(merged_size, 2)
-        self.dropout = nn.Dropout(0.3)
-        self.text_dropout = nn.Dropout(0.4)
-        self.audio_dropout = nn.Dropout(0.2)
+        self.dropout = nn.Dropout(0.8)
+        self.text_dropout = nn.Dropout(0.8)
+        self.audio_dropout = nn.Dropout(0.8)
 
     def forward(self, text: torch.Tensor, audio: torch.Tensor):
         gated = self.ac(self.hidden(torch.cat([self.text_dropout(text), self.audio_dropout(audio)], dim=-1)))
@@ -708,7 +708,7 @@ class MmLlamaForSequenceClassification(MmLlama):
         self.classifier = nn.Linear(
             self.output_projection_size, config.num_labels, bias=False
         )
-        self.dropout = nn.Dropout(0.6)
+        self.dropout = nn.Dropout(0.8)
         self.norm = LlamaRMSNorm(self.output_projection_size)
 
         self.ignore_acoustic = False
