@@ -624,8 +624,8 @@ def evaluate_f1(
 
     f1 = f1_score(all_targets, all_preds, average="weighted")
     preds_for_eval = []
-    for i, (inp, pred, target, cert) in enumerate(
-        zip(all_inputs, all_preds, all_targets, all_preds_cert)
+    for i, (inp, pred, target, cert, gates) in enumerate(
+        zip(all_inputs, all_preds, all_targets, all_preds_cert, all_gates)
     ):
         preds_for_eval.append(
             {
@@ -634,6 +634,7 @@ def evaluate_f1(
                 "output": pred,
                 "target": target,
                 "certainty": cert,
+                "gates": gates.tolist(),
             }
         )
     suffix = (
