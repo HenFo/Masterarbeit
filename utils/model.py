@@ -775,7 +775,7 @@ class MmLlamaForSequenceClassification(MmLlama):
         if gate_loss is not None:
             loss = loss + gate_loss
 
-        return SequenceClassifierOutput(logits=logits, loss=loss, main_loss=main_loss, text_loss=text_loss, audio_loss=audio_loss, gate_loss=gate_loss)
+        return SequenceClassifierOutput(logits=logits, loss=loss, main_loss=main_loss, text_loss=text_loss.mean(), audio_loss=audio_loss.mean(), gate_loss=gate_loss)
 
 
 

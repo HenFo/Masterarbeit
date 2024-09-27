@@ -27,6 +27,7 @@ from utils.model import (
     MmLlama,
     MmLlamaConfig,
     MmLlamaForSequenceClassification,
+    SequenceClassifierOutput,
 )
 from utils.processor import MmLlamaProcessor
 from utils.collator import SequenceClassificationCollator
@@ -364,14 +365,13 @@ def train():
             total=len(train_dataloader),
             desc=f"Epoch {epoch}",
         )
-        running_loss = 0
+        running_loss = {}
         for step, batch in batch_iterator:
             try:
                 with accelerator.accumulate(model):
-                    outputs = model(**batch)
+                    outputs: SequenceClassifierOutput = model(**batch)
                     loss = outputs.loss
-                    main_loss = outputs.main_loss.item()
-                    running_loss += main_loss
+                    running_loss = get_losses(running_loss, outputs)
 
                     optimizer.zero_grad()
                     accelerator.backward(loss)
@@ -379,7 +379,7 @@ def train():
                     lr_scheduler.step()
 
                 batch_iterator.set_description(
-                    f"Epoch: {epoch} / {args.epochs}, Current Main-Loss: {main_loss:.4f}"
+                    f"Epoch: {epoch} / {args.epochs}, Current Main-Loss: {outputs.main_loss.item():.4f}"
                 )
             except torch.cuda.OutOfMemoryError:
                 print("OutOfMemoty error on step", step, "skipping step")
@@ -387,7 +387,8 @@ def train():
                 print("Audio size", batch["acoustic"]["input_values"].size())
                 torch.cuda.empty_cache()
 
-        running_loss /= len(train_dataloader)
+        for k in running_loss:
+            running_loss[k] /= len(train_dataloader)
         train_losses.append(running_loss)
 
         # evaluation
@@ -404,9 +405,9 @@ def train():
 
             eval_loss = evaluate_train(model, epoch, eval_dataloader)
             eval_losses.append(eval_loss)
-            if eval_loss < best_eval_loss:
+            if eval_loss["main_loss"] < best_eval_loss:
                 print("Saving model")
-                best_eval_loss = eval_loss
+                best_eval_loss = eval_loss["main_loss"]
                 print(f"Best Loss: {best_eval_loss}")
                 save_model(accelerator, tokenizer, model)
                 print("model saved")
@@ -564,15 +565,25 @@ def evaluate_train(
     dataloader: DataLoader,
 ) -> float:
     eval_batch_iterator = tqdm(dataloader, total=len(dataloader), desc="Evaluating")
-    running_loss = 0
+    running_loss = {}
     model.eval()
     for step, batch in enumerate(eval_batch_iterator):
         with torch.no_grad():
-            outputs = model(**prepare_batch(batch))
-            loss = outputs.main_loss
-            running_loss += loss.item()
-    running_loss /= len(dataloader)
-    print(f"Loss in Epoch {epoch}: {running_loss}")
+            outputs: SequenceClassifierOutput = model(**prepare_batch(batch))
+            running_loss = get_losses(running_loss, outputs)
+
+    for k in running_loss:
+        running_loss[k] /= len(dataloader)
+    print(f"Loss in Epoch {epoch}: {running_loss['main_loss']}")
+    return running_loss
+
+def get_losses(running_loss:dict, outputs:SequenceClassifierOutput):
+    running_loss["loss"] = running_loss.get("loss", 0) + outputs.loss.item()
+    running_loss["main_loss"] = running_loss.get("main_loss", 0) + outputs.main_loss.item()
+    running_loss["gate_loss"] = running_loss.get("gate_loss", 0) + outputs.gate_loss.item()
+    running_loss["text_loss"] = running_loss.get("text_loss", 0) + outputs.text_loss.item()
+    running_loss["audio_loss"] = running_loss.get("audio_loss", 0) + outputs.audio_loss.item()
+
     return running_loss
 
 
@@ -624,8 +635,8 @@ def evaluate_f1(
 
     f1 = f1_score(all_targets, all_preds, average="weighted")
     preds_for_eval = []
-    for i, (inp, pred, target, cert, gates) in enumerate(
-        zip(all_inputs, all_preds, all_targets, all_preds_cert, all_gates)
+    for i, (inp, pred, target, cert) in enumerate(
+        zip(all_inputs, all_preds, all_targets, all_preds_cert)
     ):
         preds_for_eval.append(
             {
@@ -634,7 +645,6 @@ def evaluate_f1(
                 "output": pred,
                 "target": target,
                 "certainty": cert,
-                "gates": gates.tolist(),
             }
         )
     suffix = (
