@@ -138,11 +138,11 @@ if [ "$TRAIN" = "True" ]; then
         --test_dataset $DS_TEST_PATH \
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
-        --epochs 10 \
-        --lr 2e-5 \
+        --epochs 15 \
+        --lr 5e-5 \
         --min_lr_ratio 0.5 \
         --warmup_ratio 0.1 \
-        --weight_decay 8e-2 \
+        --weight_decay 1e-3 \
         --stage 3 \
         --window_size $WINDOW \
 

@@ -659,9 +659,9 @@ class GatingLayer(nn.Module):
         self.hidden = nn.Linear(merged_size, merged_size)
         self.ac = nn.SiLU()
         self.fc = nn.Linear(merged_size, 2)
-        self.dropout = nn.Dropout(0.8)
-        self.text_dropout = nn.Dropout(0.8)
-        self.audio_dropout = nn.Dropout(0.8)
+        self.dropout = nn.Dropout(0.85)
+        self.text_dropout = nn.Dropout(0.85)
+        self.audio_dropout = nn.Dropout(0.85)
 
     def forward(self, text: torch.Tensor, audio: torch.Tensor):
         gated = self.ac(self.hidden(torch.cat([self.text_dropout(text), self.audio_dropout(audio)], dim=-1)))
@@ -687,6 +687,18 @@ class ModalityClassifier(nn.Module):
 
         return main_path, cls_path, loss
 
+class Adapter(nn.Module):
+    def __init__(self, dim: int, r: int, alpha: int):
+        super(Adapter, self).__init__()
+        self.down = nn.Linear(dim, r, bias=False)
+        self.up = nn.Linear(r, dim, bias=False)
+        nn.init.zeros_(self.up.weight)
+        # nn.init.zeros_(self.up.bias)
+        self.alpha = alpha
+        self.r = r
+    
+    def forward(self, x: torch.Tensor):
+        return self.up(self.down(x)) * (self.alpha / self.r) + x
 
 class MmLlamaForSequenceClassification(MmLlama):
     def __init__(self, config: MmLlamaConfig, **kwargs):
@@ -700,6 +712,9 @@ class MmLlamaForSequenceClassification(MmLlama):
         self.audio_projector = ModalityClassifier(
             config, config.audio_config.hidden_size, self.output_projection_size
         )
+
+        self.text_adapter = Adapter(self.output_projection_size, 32, 8)
+        self.audio_adapter = Adapter(self.output_projection_size, 32, 8)
 
         self.gate = GatingLayer(
             self.output_projection_size, self.output_projection_size
@@ -762,6 +777,9 @@ class MmLlamaForSequenceClassification(MmLlama):
 
         else:
             gate = torch.softmax(gate, dim=1)
+
+            text_down = self.text_adapter(text_down.detach())
+            audio_down = self.audio_adapter(audio_down.detach())
             
             merged = self.norm(text_down * gate[:, 0, None] + audio_down * gate[:, 1, None])
             logits = self.classifier(self.dropout(merged))
