@@ -2,7 +2,7 @@
 
 TRAIN=True
 TEST=True
-ABLATION=True
+ABLATION=False
 
 WINDOW=12
 
@@ -109,7 +109,7 @@ if [ "$TRAIN" = "True" ]; then
         --test_dataset $DS_TEST_PATH \
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
-        --epochs 3 \
+        --epochs 4 \
         --lr 2e-5 \
         --min_lr_ratio 0.2 \
         --warmup_ratio 0.1 \

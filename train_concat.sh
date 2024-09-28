@@ -58,7 +58,7 @@ stage_1_path=$OUTPUT_PATH"stage_1/"
 stage_2_path=$OUTPUT_PATH"stage_2/"
 stage_3_path=$OUTPUT_PATH"stage_3/"
 
-output_path=$stage_1_path
+output_path=$stage_3_path
 
 if [ "$TRAIN" = "True" ]; then
     echo "Running stage 1"
@@ -112,8 +112,8 @@ if [ "$TRAIN" = "True" ]; then
         --lora_dropout 0.25 \
         --lora_module_name ".*?[qkv]_proj" \
         --min_lr_ratio 0.8 \
-        --warmup_ratio 0.2 \
-        --do_auxilary_task
+        --warmup_ratio 0.2 
+
 
     if [ $? -ne 0 ]; then
         echo "An error occurred. Terminating."
@@ -170,6 +170,7 @@ fi
 if [ "$ABLATION" = "True" ]; then
 
     echo "Running ablation"
+    # Performance of projector training only
     python ./run_scripts/main_concat.py \
         --evaluation \
         --llm_id $LANGUAGE_MODEL \
@@ -178,11 +179,11 @@ if [ "$ABLATION" = "True" ]; then
         --output_path $stage_1_path \
         --test_dataset $DS_TEST_PATH \
         --dev_dataset $DS_DEV_PATH \
-        --window_size $WINDOW \
+        --window_size 1 \
         --task "audio_only" \
         --batch_size 8
     
-    
+    # Performance before lora fine-tuning
     python ./run_scripts/main_concat.py \
         --evaluation \
         --llm_id $LANGUAGE_MODEL \
@@ -191,7 +192,7 @@ if [ "$ABLATION" = "True" ]; then
         --output_path $stage_1_path \
         --test_dataset $DS_TEST_PATH \
         --dev_dataset $DS_DEV_PATH \
-        --window_size $WINDOW \
+        --window_size 1 \
         --task "normal" \
         --batch_size 8
 fi
