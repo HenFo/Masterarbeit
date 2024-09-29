@@ -19,6 +19,7 @@ from plotnine import (
     scale_color_manual,
     scale_fill_cmap,
     scale_x_discrete,
+    theme_bw,
     xlab,
     ylab,
 )
@@ -156,13 +157,16 @@ def print_confusion_matrix(
     results: pd.DataFrame,
     target_labels: list[str] | None = None,
     output_column: str = "output",
+    target_column: str = "target",
+    cm: np.ndarray | None = None,
 ) -> None:
     target_labels = (
-        results["target"].unique() if target_labels is None else target_labels
+        results[target_column].unique() if target_labels is None else target_labels
     )
-    cm = confusion_matrix(
-        results["target"], results[output_column], labels=target_labels
-    )
+    if cm is None:
+        cm = confusion_matrix(
+            results[target_column], results[output_column], labels=target_labels
+        )
     cm_df = pd.DataFrame(cm, index=target_labels, columns=target_labels)
     cm_melted = cm_df.reset_index().melt(id_vars="index", value_name="count")
     cm_melted.columns = ["actual", "predicted", "count"]
@@ -172,7 +176,7 @@ def print_confusion_matrix(
     )
 
     # Calculate total counts for each actual class
-    total_counts = cm_melted.groupby("actual")["count"].sum().reset_index()
+    total_counts = cm_melted.groupby("actual", observed=True)["count"].sum().reset_index()
     total_counts.columns = ["actual", "total_count"]
 
     # Merge total counts back to the melted DataFrame
@@ -201,59 +205,11 @@ def print_confusion_matrix(
         + scale_x_discrete(limits=target_labels[::-1])
         + scale_fill_cmap(cmap_name="magma")
         + scale_color_manual(["black", "white"])
+        + theme_bw()
     )
 
     p.show()
 
-
-
-def fuzzy_join(
-    df1: pd.DataFrame, df2: pd.DataFrame, col1: str, col2: str, suffixes=("", "_y")
-) -> pd.DataFrame:
-    """
-    Join two pandas DataFrames based on two columns that are not 100% equal by fuzzy matching the content of the two columns.
-    """
-
-    df2 = df2.copy()
-
-    df2["input_y"] = df2[col2]
-
-    df_joined = pd.merge(df1, df2, on=["target", "dialogue_length"], suffixes=suffixes)
-
-    col1, col2 = col1 + suffixes[0], col2 + suffixes[1]
-
-    df_joined["similarity"] = df_joined.apply(
-        lambda x: fuzz.ratio(x[col1], x[col2]), axis=1
-    )
-
-    df_joined = (
-        df_joined.groupby(["target", "dialogue_length"])
-        .apply(lambda x: x.loc[x["similarity"].idxmax()])
-        .reset_index(drop=True)
-    )
-
-    return df_joined
-
-
-# def fuzzy_join(
-#     df1: pd.DataFrame, df2: pd.DataFrame, col1: str, col2: str, suffixes=("", "_y")
-# ) -> pd.DataFrame:
-#     """
-#     Join two pandas DataFrames based on two columns that are not 100% equal by fuzzy matching the content of the two columns.
-#     """
-
-#     df2 = df2.copy()
-#     df2["fuzzy_match"] = df2[col2]
-
-#     df1 = df1.copy()
-#     df1["fuzzy_match"] = df1[col1].apply(
-#         lambda x: process.extractOne(x, df2["fuzzy_match"], scorer=fuzz.ratio)[0]
-#     )
-#     df1 = pd.merge(df1, df2, on="fuzzy_match", suffixes=suffixes)
-
-#     df1 = df1.drop(columns=["fuzzy_match"])
-
-#     return df1
 
 
 def get_model(
@@ -345,9 +301,21 @@ def get_samples(
     return samples
 
 
-if __name__ == "__main__":
-    df1 = pd.DataFrame({"a": ["aaa", "bbb", "ccc"], "b": [1, 2, 3]})
-    df2 = pd.DataFrame({"a": ["aba", "bcb", "cac"], "c": [4, 5, 6]})
 
-    df = fuzzy_join(df1, df2, "a", "a")
-    print(df)
+def classify_sentiment(lab:str, positive:list[str], negative:list[str]) -> str:
+    """
+    Classify a sentiment label into one of three categories: positive, negative, or neutral.
+
+    Args:
+        lab (str): The sentiment label to classify.
+        positive (list[str]): A list of sentiment labels that are considered positive.
+        negative (list[str]): A list of sentiment labels that are considered negative.
+
+    Returns:
+        str: The classified sentiment label.
+    """
+    if lab in negative:
+        return "negative"
+    elif lab in positive:
+        return "positive"
+    return "neutral"
