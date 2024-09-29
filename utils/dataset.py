@@ -148,7 +148,7 @@ class MeldAudioDataset(Dataset):
 class ERCDataset(Dataset, ABC):
     emotions: list[str]
     speaker: list[str]
-    
+
     def __init__(
         self,
         dataset_path: str,
@@ -162,7 +162,14 @@ class ERCDataset(Dataset, ABC):
         include_target_text_percentage: float = 1.0,
     ):
         assert mode in ["train", "dev", "test"]
-        assert task in ["normal", "speaker", "emotion", "mixed", "audio_only"]
+        assert task in [
+            "normal",
+            "speaker",
+            "emotion",
+            "mixed",
+            "audio_only",
+            "text_only",
+        ]
         assert audio_placement in ["target", "front", "enclose", "none"]
         self.mode = mode
         self.dataset_path = dataset_path
@@ -188,8 +195,12 @@ class ERCDataset(Dataset, ABC):
         audio = None
         text = None
 
-        if self.task == "normal":
-            audio, text = self._get_normal_input(history)
+        if self.task == "normal" or self.task == "text_only":
+            audio, text = self._get_normal_input(
+                history
+            )
+            if self.task == "text_only":
+                audio = None
         elif self.task == "emotion":
             text = self._generate_emotion_prediction(history)
         elif self.task == "mixed":
@@ -212,7 +223,7 @@ class ERCDataset(Dataset, ABC):
     def id2label(self, id) -> str:
         return self.emotions[id]
 
-    def _get_normal_input(self, history):
+    def _get_normal_input(self, history, include_audio=True):
         corrupt = self._check_audio_corruption(history.iloc[-1].name)
         audio = None
         text = None
@@ -220,7 +231,9 @@ class ERCDataset(Dataset, ABC):
             text = self._generate_input(history, include_audio=False)
         else:
             audio = self._get_audio(history.iloc[-1])
-            include_audio = np.random.random() < self.include_audio_percentage
+            include_audio = (
+                np.random.random() < self.include_audio_percentage and include_audio
+            )
             include_text = (
                 np.random.random() < self.include_target_text_percentage
                 or not include_audio
@@ -294,7 +307,7 @@ class ERCDataset(Dataset, ABC):
             return {"input": prompt, "target": target["Emotion"]}
 
         return self._generate_input(dialog, self.emotions)
-    
+
     def _get_audio_only_input(self, dialog: pd.DataFrame) -> dict:
         target = dialog.iloc[-1]
         corrupt = self._check_audio_corruption(target.name)
@@ -310,14 +323,16 @@ class ERCDataset(Dataset, ABC):
         include_text: bool = True,
     ) -> dict:
         prompts = dialog["Speaker"] + ': "' + dialog["Utterance"] + '"'
-        dialog_chain = "### "+" \t ".join(prompts) + " ###"
+        dialog_chain = "### " + " \t ".join(prompts) + " ###"
         target = dialog.iloc[-1]
         instruction = f"Please select the emotional label of <{target['Speaker']}: "
         if include_audio:
             if self.audio_placement == "target":
                 dialog_chain += " Audio features of last utterance: [<audio>]"
             if self.audio_placement == "front":
-                dialog_chain = f"Audio features of last utterance: [<audio>] {dialog_chain}"
+                dialog_chain = (
+                    f"Audio features of last utterance: [<audio>] {dialog_chain}"
+                )
         if include_text:
             if self.audio_placement == "enclose":
                 target_utterance = f"<audio> {target['Utterance']} </audio>"
@@ -330,7 +345,6 @@ class ERCDataset(Dataset, ABC):
                 )
             else:
                 instruction += f"\"{target['Utterance']}\""
-        
 
         instruction += f"> from <{', '.join(self.emotions)}>"
         if include_audio and self.audio_placement == "target":
@@ -474,7 +488,7 @@ if __name__ == "__main__":
     PATH = "/home/fock/code/MultiModalInstructERC/datasets/iemocap/iemocap.csv"
     # tasks = ["normal", "speaker", "emotion", "mixed"]
     ds = IemocapDataset(
-        PATH, mode="test", window=1, task="normal", audio_placement="enclose"
+        PATH, mode="test", window=1, task="text_only", audio_placement="target"
     )
 
     x = ds[3]
