@@ -319,3 +319,67 @@ def classify_sentiment(lab:str, positive:list[str], negative:list[str]) -> str:
     elif lab in positive:
         return "positive"
     return "neutral"
+
+
+
+
+def parse_iemocap_annotations(file_content: str) -> list[dict]:
+    label_mapping = {
+        "neu": "neutral",
+        "ang": "angry",
+        "fru": "frustrated",
+        "hap": "happy",
+        "exc": "excited",
+        "sad": "sad",
+    }
+    # Split the content by lines
+    lines = file_content.strip().split("\n")
+
+    # Initialize variables
+    results = []
+
+    # Iterate over the lines to find the annotations
+    i = 1
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # Process block's first line
+        if line and "[" in line:  # Indicates a new block
+            first_line = line.split("\t")
+            label = label_mapping.get(first_line[2], first_line[2])  # Capitalize the label for comparison
+            i += 1
+
+            annotations = []
+            # Process the next four lines for annotations
+            for _ in range(4):
+                annotator_line = lines[i].strip()
+                if "\t" in annotator_line:
+                    try:
+                        emotions = annotator_line.split("\t")[1].split(";")
+                        emotions = [e.strip().lower() for e in emotions if e.strip()]
+                    except IndexError:
+                        emotions = []
+                    annotations.append(emotions)
+                i += 1
+
+            # Flatten the annotations for first_annotations
+            annotations = [
+                emotion for sublist in annotations for emotion in sublist
+            ]
+
+            # Calculate agreement score
+            occurrences_of_label = annotations.count(label)
+            agreement_score = occurrences_of_label / 4 # len(annotations)
+
+            # Store the result in the list
+            result = {
+                "label": label,  # Keep the original case for the label
+                "annotations": annotations,
+                "agreement_score": round(agreement_score, 2),
+                "spread": len(set(annotations))
+            }
+            results.append(result)
+        else:
+            i += 1  # Skip lines without blocks
+
+    return results
