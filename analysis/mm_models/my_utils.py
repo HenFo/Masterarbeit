@@ -5,21 +5,24 @@ sys.path.append(os.path.abspath("../../"))
 
 import json
 import re
-from typing import Literal, Type
+from typing import Type
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
-from fuzzywuzzy import fuzz, process
 from plotnine import (
     aes,
+    element_text,
     geom_text,
     geom_tile,
     ggplot,
+    ggtitle,
     scale_color_manual,
     scale_fill_cmap,
     scale_fill_gradient2,
     scale_x_discrete,
+    theme,
     theme_bw,
     xlab,
     ylab,
@@ -31,6 +34,9 @@ from utils.collator import SequenceClassificationCollator, SequenceGenerationCol
 from utils.dataset import ERCDataset, IemocapDataset, MeldDataset
 from utils.model import MmLlama, MmLlamaConfig
 from utils.processor import MmLlamaProcessor
+
+plt.rcParams["figure.figsize"] = (10, 12)
+plt.rcParams["figure.dpi"] = 96
 
 
 def get_dialog(prompt: str) -> tuple[list[str], set[str]]:
@@ -159,6 +165,8 @@ def print_confusion_matrix(
     target_labels: list[str] | None = None,
     output_column: str = "output",
     target_column: str = "target",
+    title: str = "Confusion Matrix",
+    name: str |None = None
 ) -> None:
     target_labels = (
         results[target_column].unique() if target_labels is None else target_labels
@@ -175,7 +183,7 @@ def print_confusion_matrix(
 
     cm_melted["fraction"] = (cm_melted["count"] / cm_melted["total_count"]).round(2)
     cm_melted["label"] = (
-        cm_melted["count"].astype(str) + " (" + cm_melted["fraction"].astype(str) + ")"
+        cm_melted["count"].astype(str) + "\n" + (cm_melted["fraction"]*100).astype(int).astype(str) + "%"
     )
 
     cm_melted["p_group"] = cm_melted["fraction"].apply(
@@ -187,14 +195,24 @@ def print_confusion_matrix(
             cm_melted, aes("factor(predicted)", "factor(actual)", fill="color_scale")
         )
         + geom_tile(show_legend=False)
-        + geom_text(aes(label="label", color="p_group"), size=8, show_legend=False)
-        + ylab("Predicted")
-        + xlab("True")
+        + geom_text(aes(label="label", color="p_group"), size=12, show_legend=False)
+        + ggtitle(title)
+        + ylab("True Emotion")
+        + xlab("Predicted Emotion")
         + scale_x_discrete(limits=target_labels[::-1])
         + scale_fill_cmap(cmap_name="magma")
         + scale_color_manual(["black", "white"])
         + theme_bw()
+        + theme(
+            title=element_text(size=18),  # Increases title size
+            axis_title=element_text(size=20),  # Increases axis title size
+            axis_text=element_text(size=16),  # Increases axis tick label size
+            axis_text_x=element_text(rotation=45),  # Rotates x-axis tick labels
+        )
     )
+
+    if name is not None:
+        p.save(name, width=7, height=7, dpi=300)
 
     p.show()
 
@@ -205,6 +223,8 @@ def print_confusion_matrix_difference(
     output_column1: str = "output",
     output_column2: str = "output_y",
     target_column: str = "target",
+    title: str = "Difference in Confusion Matrices",
+    name: str | None = None,
 ) -> None:
     target_labels = (
         results[target_column].unique() if target_labels is None else target_labels
@@ -236,14 +256,24 @@ def print_confusion_matrix_difference(
             cm_melted, aes("factor(predicted)", "factor(actual)", fill="color_scale")
         )
         + geom_tile(show_legend=False)
-        + geom_text(aes(label="label", color="p_group"), size=8, show_legend=False)
-        + ylab("Predicted")
-        + xlab("True")
+        + geom_text(aes(label="label", color="p_group"), size=12, show_legend=False)
+        + ggtitle(title)
+        + ylab("True Emotion")
+        + xlab("Predicted Emotion")
         + scale_x_discrete(limits=target_labels[::-1])
         + scale_fill_gradient2(low="#ed1213", mid="white", high="#1fae08")
         + scale_color_manual(["black", "black"])
         + theme_bw()
+        + theme(
+            title=element_text(size=18),
+            axis_title=element_text(size=20),  # Increases axis title size
+            axis_text=element_text(size=16),  # Increases axis tick label size
+            axis_text_x=element_text(rotation=45),  # Rotates x-axis tick labels
+        )
     )
+
+    if name is not None:
+        p.save(name, width=7, height=7, dpi=300)
 
     p.show()
 
