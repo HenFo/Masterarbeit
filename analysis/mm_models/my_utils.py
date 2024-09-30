@@ -5,7 +5,7 @@ sys.path.append(os.path.abspath("../../"))
 
 import json
 import re
-from typing import Type
+from typing import Literal, Type
 
 import numpy as np
 import pandas as pd
@@ -18,6 +18,7 @@ from plotnine import (
     ggplot,
     scale_color_manual,
     scale_fill_cmap,
+    scale_fill_gradient2,
     scale_x_discrete,
     theme_bw,
     xlab,
@@ -154,49 +155,36 @@ def get_instructerc_results(base_path: str, dataset: str) -> pd.DataFrame:
 
 
 def print_confusion_matrix(
-    results: pd.DataFrame,
+    results: pd.DataFrame | None = None,
     target_labels: list[str] | None = None,
     output_column: str = "output",
     target_column: str = "target",
-    cm: np.ndarray | None = None,
 ) -> None:
     target_labels = (
         results[target_column].unique() if target_labels is None else target_labels
     )
-    if cm is None:
-        cm = confusion_matrix(
-            results[target_column], results[output_column], labels=target_labels
-        )
-    cm_df = pd.DataFrame(cm, index=target_labels, columns=target_labels)
-    cm_melted = cm_df.reset_index().melt(id_vars="index", value_name="count")
-    cm_melted.columns = ["actual", "predicted", "count"]
-    cm_melted["actual"] = pd.Categorical(cm_melted["actual"], categories=target_labels)
-    cm_melted["predicted"] = pd.Categorical(
-        cm_melted["predicted"], categories=target_labels
+    cm = confusion_matrix(
+        results[target_column], results[output_column], labels=target_labels
     )
-
-    # Calculate total counts for each actual class
-    total_counts = cm_melted.groupby("actual", observed=True)["count"].sum().reset_index()
-    total_counts.columns = ["actual", "total_count"]
-
-    # Merge total counts back to the melted DataFrame
-    cm_melted = cm_melted.merge(total_counts, on="actual")
+    cm_melted = _prepare_confusion_matrix(cm, target_labels)
 
     # Calculate the fraction
-    cm_melted["sqrt_fraction"] = np.sqrt(cm_melted["count"]) / np.sqrt(
+    cm_melted["color_scale"] = np.sqrt(cm_melted["count"]) / np.sqrt(
         cm_melted["total_count"]
     )
+
     cm_melted["fraction"] = (cm_melted["count"] / cm_melted["total_count"]).round(2)
     cm_melted["label"] = (
         cm_melted["count"].astype(str) + " (" + cm_melted["fraction"].astype(str) + ")"
     )
+
     cm_melted["p_group"] = cm_melted["fraction"].apply(
         lambda x: "high" if x > 0.5 else "low"
     )
 
     p = (
         ggplot(
-            cm_melted, aes("factor(predicted)", "factor(actual)", fill="sqrt_fraction")
+            cm_melted, aes("factor(predicted)", "factor(actual)", fill="color_scale")
         )
         + geom_tile(show_legend=False)
         + geom_text(aes(label="label", color="p_group"), size=8, show_legend=False)
@@ -210,6 +198,74 @@ def print_confusion_matrix(
 
     p.show()
 
+
+def print_confusion_matrix_difference(
+    results: pd.DataFrame | None = None,
+    target_labels: list[str] | None = None,
+    output_column1: str = "output",
+    output_column2: str = "output_y",
+    target_column: str = "target",
+) -> None:
+    target_labels = (
+        results[target_column].unique() if target_labels is None else target_labels
+    )
+    cm1 = confusion_matrix(
+        results[target_column], results[output_column1], labels=target_labels
+    )
+    cm2 = confusion_matrix(
+        results[target_column], results[output_column2], labels=target_labels
+    )
+
+    cm = cm1 - cm2
+
+    cm_melted = _prepare_confusion_matrix(cm, target_labels)
+
+    # cm_melted["color_scale"] = (cm_melted["count"].max() - cm_melted["count"]) / (
+    #     cm_melted["count"].max() - cm_melted["count"].min()
+    # )
+    cm_melted["color_scale"] = cm_melted["count"]
+
+    cm_melted["label"] = cm_melted["count"].astype(str)
+
+    cm_melted["p_group"] = cm_melted["count"].apply(
+        lambda x: "high" if x < 0 else "low"
+    )
+
+    p = (
+        ggplot(
+            cm_melted, aes("factor(predicted)", "factor(actual)", fill="color_scale")
+        )
+        + geom_tile(show_legend=False)
+        + geom_text(aes(label="label", color="p_group"), size=8, show_legend=False)
+        + ylab("Predicted")
+        + xlab("True")
+        + scale_x_discrete(limits=target_labels[::-1])
+        + scale_fill_gradient2(low="#ed1213", mid="white", high="#1fae08")
+        + scale_color_manual(["black", "black"])
+        + theme_bw()
+    )
+
+    p.show()
+
+
+def _prepare_confusion_matrix(cm: np.ndarray, target_labels: list[str]) -> pd.DataFrame:
+    cm_df = pd.DataFrame(cm, index=target_labels, columns=target_labels)
+    cm_melted = cm_df.reset_index().melt(id_vars="index", value_name="count")
+    cm_melted.columns = ["actual", "predicted", "count"]
+    cm_melted["actual"] = pd.Categorical(cm_melted["actual"], categories=target_labels)
+    cm_melted["predicted"] = pd.Categorical(
+        cm_melted["predicted"], categories=target_labels
+    )
+
+    # Calculate total counts for each actual class
+    total_counts = (
+        cm_melted.groupby("actual", observed=True)["count"].sum().reset_index()
+    )
+    total_counts.columns = ["actual", "total_count"]
+
+    # Merge total counts back to the melted DataFrame
+    cm_melted = cm_melted.merge(total_counts, on="actual")
+    return cm_melted
 
 
 def get_model(
@@ -301,8 +357,7 @@ def get_samples(
     return samples
 
 
-
-def classify_sentiment(lab:str, positive:list[str], negative:list[str]) -> str:
+def classify_sentiment(lab: str, positive: list[str], negative: list[str]) -> str:
     """
     Classify a sentiment label into one of three categories: positive, negative, or neutral.
 
@@ -319,8 +374,6 @@ def classify_sentiment(lab:str, positive:list[str], negative:list[str]) -> str:
     elif lab in positive:
         return "positive"
     return "neutral"
-
-
 
 
 def parse_iemocap_annotations(file_content: str) -> list[dict]:
@@ -346,7 +399,9 @@ def parse_iemocap_annotations(file_content: str) -> list[dict]:
         # Process block's first line
         if line and "[" in line:  # Indicates a new block
             first_line = line.split("\t")
-            label = label_mapping.get(first_line[2], first_line[2])  # Capitalize the label for comparison
+            label = label_mapping.get(
+                first_line[2], first_line[2]
+            )  # Capitalize the label for comparison
             i += 1
 
             annotations = []
@@ -363,20 +418,18 @@ def parse_iemocap_annotations(file_content: str) -> list[dict]:
                 i += 1
 
             # Flatten the annotations for first_annotations
-            annotations = [
-                emotion for sublist in annotations for emotion in sublist
-            ]
+            annotations = [emotion for sublist in annotations for emotion in sublist]
 
             # Calculate agreement score
             occurrences_of_label = annotations.count(label)
-            agreement_score = occurrences_of_label / 4 # len(annotations)
+            agreement_score = occurrences_of_label / 4  # len(annotations)
 
             # Store the result in the list
             result = {
                 "label": label,  # Keep the original case for the label
                 "annotations": annotations,
                 "agreement_score": round(agreement_score, 2),
-                "spread": len(set(annotations))
+                "spread": len(set(annotations)),
             }
             results.append(result)
         else:
