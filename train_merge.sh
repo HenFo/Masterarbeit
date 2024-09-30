@@ -10,7 +10,7 @@ WINDOW=12
 dataset="iemocap"
 model="LLaMA2-base"
 
-experiment_suffix="audio_only_pretraining2"
+experiment_suffix="final_version"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -43,10 +43,20 @@ if [ $dataset = "meld" ]; then
     DS_DEV_PATH="$DS_BASE/dev_sent_emo.csv"
     DS_TEST_PATH="$DS_BASE/test_sent_emo.csv"
 
+    s1_weight_decay=1e-2
+    s1_lr=1e-5
+    s1_min_lr_ratio=0.5
+    s1_epochs=10
+
 elif [ $dataset = "iemocap" ]; then
     DS_TRAIN_PATH="$DS_BASE/iemocap.csv"
     DS_DEV_PATH="$DS_BASE/iemocap.csv"
     DS_TEST_PATH="$DS_BASE/iemocap.csv"
+
+    s1_weight_decay=5e-3
+    s1_lr=3e-5
+    s1_min_lr_ratio=1.0
+    s1_epochs=20
 
 else
     echo "Invalid dataset"
@@ -72,10 +82,10 @@ if [ "$TRAIN" = "True" ]; then
         --test_dataset $DS_TEST_PATH \
         --dev_dataset $DS_DEV_PATH \
         --task "normal" \
-        --epochs 20 \
-        --lr 3e-5 \
-        --weight_decay 5e-3 \
-        --min_lr_ratio 1.0 \
+        --epochs $s1_epochs \
+        --lr $s1_lr \
+        --weight_decay $s1_weight_decay \
+        --min_lr_ratio $s1_min_lr_ratio \
         --warmup_ratio 0.2 \
         --stage 1 \
         --window_size 1
@@ -131,32 +141,32 @@ if [ "$TRAIN" = "True" ]; then
     #     cp $stage_2_path/$file $stage_3_path
     # done
 
-    # echo "Running stage 3"
-    # accelerate launch ./run_scripts/main_merge.py \
-    #     --batch_size 2 \
-    #     --gradient_accumulation_steps 16 \
-    #     --llm_id $LANGUAGE_MODEL \
-    #     --acoustic_id $ACOUSTIC_MODEL \
-    #     --adapter_id $LORA_ADAPTER \
-    #     --output_path $stage_3_path \
-    #     --checkpoint_path $stage_2_path \
-    #     --train_dataset $DS_TRAIN_PATH \
-    #     --test_dataset $DS_TEST_PATH \
-    #     --dev_dataset $DS_DEV_PATH \
-    #     --task "normal" \
-    #     --epochs 20 \
-    #     --lr 1 \
-    #     --min_lr_ratio 0.1 \
-    #     --warmup_ratio 0.1 \
-    #     --stage 3 \
-    #     --window_size $WINDOW
+    echo "Running stage 3"
+    accelerate launch ./run_scripts/main_merge.py \
+        --batch_size 2 \
+        --gradient_accumulation_steps 16 \
+        --llm_id $LANGUAGE_MODEL \
+        --acoustic_id $ACOUSTIC_MODEL \
+        --adapter_id $LORA_ADAPTER \
+        --output_path $stage_3_path \
+        --checkpoint_path $stage_2_path \
+        --train_dataset $DS_TRAIN_PATH \
+        --test_dataset $DS_TEST_PATH \
+        --dev_dataset $DS_DEV_PATH \
+        --task "normal" \
+        --epochs 20 \
+        --lr 1 \
+        --min_lr_ratio 0.1 \
+        --warmup_ratio 0.1 \
+        --stage 3 \
+        --window_size $WINDOW
 
-    # if [ $? -ne 0 ]; then
-    #     echo "An error occurred. Terminating."
-    #     exit 1
-    # fi
+    if [ $? -ne 0 ]; then
+        echo "An error occurred. Terminating."
+        exit 1
+    fi
 
-    # output_path=$stage_3_path
+    output_path=$stage_3_path
 
 fi
 
