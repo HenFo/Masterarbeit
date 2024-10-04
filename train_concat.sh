@@ -11,7 +11,7 @@ WINDOW=12
 dataset="iemocap"
 model="LLaMA2-base"
 
-experiment_suffix="audio_only_pretraining"
+experiment_suffix="final_version"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -44,10 +44,24 @@ if [ $dataset = "meld" ]; then
     DS_DEV_PATH="$DS_BASE/dev_sent_emo.csv"
     DS_TEST_PATH="$DS_BASE/test_sent_emo.csv"
 
+    s1_epochs=10
+    s1_lr=1e-5
+    s1_weight_decay=1e-2
+    s1_min_lr_ratio=0.5
+
+    s2_min_lr_ratio=0.5
+
 elif [ $dataset = "iemocap" ]; then
     DS_TRAIN_PATH="$DS_BASE/iemocap.csv"
     DS_DEV_PATH="$DS_BASE/iemocap.csv"
     DS_TEST_PATH="$DS_BASE/iemocap.csv"
+
+    s1_epochs=20
+    s1_lr=3e-5
+    s1_weight_decay=5e-3
+    s1_min_lr_ratio=1.0
+
+    s2_min_lr_ratio=0.8
 
 else
     echo "Invalid dataset"
@@ -73,12 +87,12 @@ if [ "$TRAIN" = "True" ]; then
         --test_dataset $DS_TEST_PATH \
         --dev_dataset $DS_DEV_PATH \
         --task "audio_only" \
-        --epochs 20 \
-        --lr 3e-5 \
+        --epochs $s1_epochs \
+        --lr $s1_lr \
         --stage 1 \
         --window_size 1 \
-        --weight_decay 5e-3 \
-        --min_lr_ratio 1.0 \
+        --weight_decay $s1_weight_decay \
+        --min_lr_ratio $s1_min_lr_ratio \
         --warmup_ratio 0.2 
 
     if [ $? -ne 0 ]; then
@@ -111,7 +125,7 @@ if [ "$TRAIN" = "True" ]; then
         --lora_alpha 16 \
         --lora_dropout 0.25 \
         --lora_module_name ".*?[qkv]_proj" \
-        --min_lr_ratio 0.8 \
+        --min_lr_ratio $s2_min_lr_ratio \
         --warmup_ratio 0.2 
 
 
