@@ -472,7 +472,7 @@ class MmLlamaMerge(MmLlamaConcat):
         self,
         config: MmLlamaConfig,
         train_llm: bool = False,
-        aux_scalar: float = 1.0,
+        aux_scalar: float = 0.5,
     ) -> None:
         super(MmLlamaMerge, self).__init__(config, train_llm)
         self.aux_scalar = aux_scalar
