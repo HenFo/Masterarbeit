@@ -185,6 +185,8 @@ def load_model_for_stage(
         return _load_model_for_stage_2(model)
     elif stage == 3:
         return _load_model_for_stage_3(model)
+    elif stage == 4:
+        return _load_model_for_stage_4(model)
     else:
         raise ValueError("Invalid stage number")
 
@@ -235,7 +237,20 @@ def _load_model_for_stage_3(model: MmLlamaConcat):
 
     return model, execute_after_prepare
 
+def _load_model_for_stage_4(model: MmLlamaConcat):
+    lora_config = LoraConfig(
+        r=args.lora_dim,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
+        target_modules=args.lora_module_name,
+        bias="none",
+    )
+    model = model.apply_training_lora(lora_config)
 
+    def execute_after_prepare(model: MmLlamaConcat):
+        return model
+
+    return model, execute_after_prepare
 
 
 def load_model_for_test(model: MmLlamaConcat):

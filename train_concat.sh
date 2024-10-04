@@ -1,9 +1,10 @@
 #!/bin/bash
 
 
-TRAIN=True
-TEST=True
-ABLATION=True
+TRAIN=False
+TEST=False
+ABLATION=False
+TRAIN_STAGE_3_ONLY=True
 
 WINDOW=12
 
@@ -165,6 +166,41 @@ if [ "$TRAIN" = "True" ]; then
 
     output_path=$stage_3_path
 
+
+elif [ "$TRAIN_STAGE_3_ONLY" = "True" ]; then
+    stage_3_path=$OUTPUT_PATH"stage_3_only/"
+    echo "Running stage 3"
+    accelerate launch ./run_scripts/main_concat.py \
+        --batch_size 2 \
+        --gradient_accumulation_steps 16 \
+        --llm_id $LANGUAGE_MODEL \
+        --acoustic_id $ACOUSTIC_MODEL \
+        --adapter_id $LORA_ADAPTER \
+        --output_path $stage_3_path \
+        --train_dataset $DS_TRAIN_PATH \
+        --test_dataset $DS_TEST_PATH \
+        --dev_dataset $DS_DEV_PATH \
+        --task "normal" \
+        --epochs 15 \
+        --lr 1e-5 \
+        --train_llm \
+        --stage 4 \
+        --window_size $WINDOW \
+        --weight_decay 1e-2 \
+        --min_lr_ratio 0.1 \
+        --warmup_ratio 0.1 \
+        --lora_dim 8 \
+        --lora_alpha 16 \
+        --lora_dropout 0.25 \
+        --lora_module_name ".*?[qkv]_proj" 
+
+    if [ $? -ne 0 ]; then
+        echo "An error occurred. Terminating."
+        exit 1
+    fi
+
+    output_path=$stage_3_path
+
 fi
 
 if [ "$TEST" = "True" ]; then
@@ -209,4 +245,5 @@ if [ "$ABLATION" = "True" ]; then
         --window_size 1 \
         --task "normal" \
         --batch_size 8
+
 fi
