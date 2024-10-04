@@ -180,8 +180,23 @@ if [ "$TEST" = "True" ]; then
         --adapter_id $LORA_ADAPTER \
         --output_path $output_path \
         --test_dataset $DS_TEST_PATH \
-        --dev_dataset $DS_DEV_PATH \
         --window_size $WINDOW \
         --batch_size 1
 
+fi
+
+if [ "$ABLATION" = "True" ]; then
+
+    echo "Running ablation"
+    # Performance of audio_only
+    python run_scripts/main_merge.py \
+        --evaluation \
+        --llm_id $LANGUAGE_MODEL \
+        --acoustic_id $ACOUSTIC_MODEL \
+        --adapter_id $LORA_ADAPTER \
+        --output_path $stage_2_path \
+        --test_dataset $DS_TEST_PATH \
+        --window_size 1 \
+        --batch_size 1 \
+        --audio_only
 fi

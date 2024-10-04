@@ -81,6 +81,7 @@ class Args:
     do_auxiliary_task: bool = False
     ignore_loss_till: int = 0
     seed: int = 42
+    audio_only: bool = False
 
 
 def parse_args():
@@ -116,6 +117,7 @@ def parse_args():
     parser.add_argument("--do_auxiliary_task", action="store_true")
     parser.add_argument("--ignore_loss_till", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--audio_only", action="store_true")
     args = parser.parse_args()
     return Args(**vars(args))
 
@@ -184,7 +186,7 @@ def load_tokenizer():
 
 
 def load_model_for_stage(
-    model:MmLlamaMerge, stage: int
+    model: MmLlamaMerge, stage: int
 ) -> tuple[MmLlamaMerge, Callable[[MmLlamaMerge], MmLlamaMerge]]:
     if stage == 1:
         return _load_model_for_stage_1(model)
@@ -199,6 +201,7 @@ def load_model_for_stage(
 def _load_model_for_stage_1(model: MmLlamaMerge):
     """Load model for stage 1 training (Projector training)"""
     model.aux_scalar = 0.0
+
     def execute_after_prepare(model: MmLlamaMerge):
         model.freeze_encoder(train_norm=True)
         model.freeze_scaling()
@@ -254,6 +257,8 @@ def load_model_for_test(model: MmLlamaMerge):
     model.load_state_dict(
         torch.load(os.path.join(args.output_path, "best_model.pth")), strict=False
     )
+    if args.audio_only:
+        model.aux_scalar = 1.0
     model = model.apply_inference_lora(args.output_path)
     return model.cuda()
 
@@ -285,7 +290,7 @@ def setup_config_and_processor():
         audio_end_token_id=audio_end_token_id,
         pad_token_id=tokenizer.pad_token_id,
         llm_pretrained_adapter=args.adapter_id,
-        num_labels=0
+        num_labels=0,
     )
 
     return tokenizer, processor, config
@@ -480,7 +485,6 @@ def _set_stage_1_changes(model: MmLlamaMerge, epoch: int, **_):
     pass
 
 
-
 def _set_stage_2_changes(
     model: MmLlamaMerge,
     epoch: int,
@@ -489,13 +493,17 @@ def _set_stage_2_changes(
     if epoch == args.time_till_aux:
         model.unfreeze_scaling()
     if epoch % 2 == 0 and epoch >= args.time_till_aux:
-        model.aux_scalar = min(
-            1.0,
-            (epoch - args.time_till_aux) / ((args.epochs - args.time_till_aux) / 2),
-        ) / 2
+        model.aux_scalar = (
+            min(
+                1.0,
+                (epoch - args.time_till_aux) / ((args.epochs - args.time_till_aux) / 2),
+            )
+            / 2
+        )
 
-    print(f"####### text * {(model.aux_scalar):.2f}, audio * {(1 - model.aux_scalar):.2f} #######")
-   
+    print(
+        f"####### text * {(model.aux_scalar):.2f}, audio * {(1 - model.aux_scalar):.2f} #######"
+    )
 
 
 def save_model(accelerator: Accelerator, tokenizer, model):
@@ -671,7 +679,8 @@ def evaluate_f1(
                 "target": target,
             }
         )
-    with open(os.path.join(args.output_path, "preds_test.json"), "wt") as f:
+    out_name = "preds_test_audio_only.json" if args.audio_only else "preds_test_normal.json"
+    with open(os.path.join(args.output_path, out_name), "wt") as f:
         json.dump(preds_for_eval, f)
 
     return f1
