@@ -359,8 +359,8 @@ T_Collator = Type[SequenceGenerationCollator] | Type[SequenceClassificationColla
 def get_samples(
     dataset_path: str,
     processor: MmLlamaProcessor,
-    collator_type: T_Collator,
     sample_indexes: list[int],
+    collator_type: T_Collator,
     dataset_kwargs: dict = {},
 ):
     """
