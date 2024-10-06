@@ -598,8 +598,8 @@ def evaluate_f1(
     all_inputs = []
     all_gates = []
 
-    def gate_hook(module, inputs, outputs):
-        all_gates.extend(outputs.cpu())
+    def gate_hook(module, inputs, outputs:torch.Tensor):
+        all_gates.extend(outputs.cpu().tolist())
 
     model.gate.register_forward_hook(gate_hook)
 
@@ -624,6 +624,7 @@ def evaluate_f1(
     all_preds = torch.stack(all_preds[: len(dataloader.dataset)])
     all_targets = all_targets[: len(dataloader.dataset)]
     all_inputs = all_inputs[: len(dataloader.dataset)]
+    all_gates = all_gates[: len(dataloader.dataset)]
 
     all_preds_cert = torch.softmax(all_preds, dim=-1).max(dim=-1).values.tolist()
     all_preds = all_preds.argmax(dim=-1).tolist()
@@ -635,8 +636,8 @@ def evaluate_f1(
 
     f1 = f1_score(all_targets, all_preds, average="weighted")
     preds_for_eval = []
-    for i, (inp, pred, target, cert) in enumerate(
-        zip(all_inputs, all_preds, all_targets, all_preds_cert)
+    for i, (inp, pred, target, cert, gate) in enumerate(
+        zip(all_inputs, all_preds, all_targets, all_preds_cert, all_gates)
     ):
         preds_for_eval.append(
             {
@@ -645,6 +646,7 @@ def evaluate_f1(
                 "output": pred,
                 "target": target,
                 "certainty": cert,
+                "gate": gate,
             }
         )
     suffix = (
