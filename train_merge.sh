@@ -67,7 +67,7 @@ stage_1_path=$OUTPUT_PATH"stage_1/"
 stage_2_path=$OUTPUT_PATH"stage_2/"
 stage_3_path=$OUTPUT_PATH"stage_3/"
 
-output_path=$stage_2_path
+output_path=$stage_3_path
 
 if [ "$TRAIN" = "True" ]; then
     echo "Running stage 1"
@@ -188,7 +188,7 @@ fi
 if [ "$ABLATION" = "True" ]; then
 
     echo "Running ablation"
-    # Performance of audio_only
+    # Performance of audio_only s2
     python run_scripts/main_merge.py \
         --evaluation \
         --llm_id $LANGUAGE_MODEL \
@@ -199,4 +199,27 @@ if [ "$ABLATION" = "True" ]; then
         --window_size 1 \
         --batch_size 1 \
         --audio_only
+    
+    # Performance of audio_only 23
+    python run_scripts/main_merge.py \
+        --evaluation \
+        --llm_id $LANGUAGE_MODEL \
+        --acoustic_id $ACOUSTIC_MODEL \
+        --adapter_id $LORA_ADAPTER \
+        --output_path $stage_3_path \
+        --test_dataset $DS_TEST_PATH \
+        --window_size 1 \
+        --batch_size 1 \
+        --audio_only
+    
+    # Performance before stage 3
+    python run_scripts/main_merge.py \
+        --evaluation \
+        --llm_id $LANGUAGE_MODEL \
+        --acoustic_id $ACOUSTIC_MODEL \
+        --adapter_id $LORA_ADAPTER \
+        --output_path $stage_2_path \
+        --test_dataset $DS_TEST_PATH \
+        --window_size $WINDOW \
+        --batch_size 1 
 fi
