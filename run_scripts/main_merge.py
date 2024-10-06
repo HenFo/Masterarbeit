@@ -258,7 +258,7 @@ def load_model_for_test(model: MmLlamaMerge):
         torch.load(os.path.join(args.output_path, "best_model.pth")), strict=False
     )
     if args.audio_only:
-        model.aux_scalar = 1.0
+        model.aux_scalar = 0.0
     model = model.apply_inference_lora(args.output_path)
     return model.cuda()
 
