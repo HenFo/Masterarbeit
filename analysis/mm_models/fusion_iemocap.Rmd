@@ -923,8 +923,8 @@ py$df |>
   scale_color_manual(values = c("#3299FF", "#FF9932"), labels=c("Audio", "Text")) +
   xlab("Prediction") +
   theme_bw() +
-  # scale_x_continuous(breaks = s) +
-  guides(fill = guide_legend(title = "Target")) +
+  scale_x_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)) +
+  guides(color = guide_legend(title = "Target")) +
   theme(axis.title.y = element_blank(),
         axis.title = element_text(size = 26),
         axis.text = element_text(size=24),
@@ -947,7 +947,7 @@ gate_df |>
   pivot_longer(!origin, names_to = "Target", values_to = "Prediction") |> 
   ggplot(aes(y = origin, x = Prediction, color = Target)) +
     geom_vline(xintercept = 0.5, color = "gray80", linewidth = 1) +
-    geom_density_ridges(alpha=0, quantile_lines = F, scale=1, fill="white", linewidth=2) +
+    geom_density_ridges(alpha=0, quantile_lines = T, scale=1, fill="white", linewidth=2) +
     scale_y_discrete(
       limits = rev(c(
         "All",
@@ -975,6 +975,12 @@ gate_df |>
 
 ggsave("images/gate_dist_iemocap.png", width = 10, height = 10)
 
+```
+
+```{r}
+py$df[py$combined_model,] |> 
+  ggplot(aes(x = text_gate_pred, y = audio_gate_pred)) + 
+    geom_point()
 ```
 
 
