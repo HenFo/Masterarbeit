@@ -166,7 +166,11 @@ def print_confusion_matrix(
     output_column: str = "output",
     target_column: str = "target",
     title: str = "Confusion Matrix",
-    name: str |None = None
+    xlab_name: str = "Predicted Emotion",
+    ylab_name: str = "True Emotion",
+    text_size: float = 12,
+    label_scaling_adjustment: float = 0,
+    name: str | None = None
 ) -> None:
     target_labels = (
         results[target_column].unique() if target_labels is None else target_labels
@@ -195,18 +199,18 @@ def print_confusion_matrix(
             cm_melted, aes("factor(predicted)", "factor(actual)", fill="color_scale")
         )
         + geom_tile(show_legend=False)
-        + geom_text(aes(label="label", color="p_group"), size=12, show_legend=False)
+        + geom_text(aes(label="label", color="p_group"), size=text_size, show_legend=False)
         + ggtitle(title)
-        + ylab("True Emotion")
-        + xlab("Predicted Emotion")
+        + ylab(ylab_name)
+        + xlab(xlab_name)
         + scale_x_discrete(limits=target_labels[::-1])
         + scale_fill_cmap(cmap_name="magma")
         + scale_color_manual(["black", "white"])
         + theme_bw()
         + theme(
-            title=element_text(size=18),  # Increases title size
-            axis_title=element_text(size=20),  # Increases axis title size
-            axis_text=element_text(size=16),  # Increases axis tick label size
+            title=element_text(size=18 + label_scaling_adjustment),  # Increases title size
+            axis_title=element_text(size=20 + label_scaling_adjustment),  # Increases axis title size
+            axis_text=element_text(size=16 + label_scaling_adjustment),  # Increases axis tick label size
             axis_text_x=element_text(rotation=45),  # Rotates x-axis tick labels
         )
     )
