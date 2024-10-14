@@ -1,0 +1,269 @@
+---
+title: An R Markdown document converted from "discussion_iemocap.ipynb"
+output: html_document
+---
+
+```{r, setup}
+library(tidyverse)
+library(ggplot2)
+library(ggVennDiagram)
+library(reticulate)
+```
+
+
+```{python}
+import os
+import sys
+
+sys.path.append(os.path.abspath("../../"))
+
+import matplotlib.pyplot as plt
+import my_utils as utils
+import numpy as np
+import pandas as pd
+
+BASE_PATH_CONCAT = os.path.join("results", "early_concat")
+BASE_PATH_FUSION = os.path.join("results", "late_fusion")
+```
+
+## IEMOCAP
+
+
+```{python}
+DATASET = "IEMOCAP"
+
+
+def get_result_dataframe(dataset: str) -> pd.DataFrame:
+    fusion_path = os.path.join(BASE_PATH_FUSION, dataset, "preds_test.json")
+    fusion_audio_path = os.path.join(
+        BASE_PATH_FUSION, dataset, "preds_test_no_text.json"
+    )
+    concat_path = os.path.join(BASE_PATH_CONCAT, dataset, "preds_test_normal.json")
+    concat_audio_path = os.path.join(
+        BASE_PATH_CONCAT, dataset, "preds_test_audio_only.json"
+    )
+
+    fusion_df = utils.build_result_dataframe(fusion_path)
+    fusion_audio_df = utils.build_result_dataframe(fusion_audio_path)
+    concat_df = utils.build_result_dataframe(concat_path)
+    concat_audio_df = utils.build_result_dataframe(concat_audio_path)
+
+    assert len(fusion_df) == len(concat_df)
+
+    results = utils.merge_result_dataframes(
+        [fusion_df, concat_df, fusion_audio_df, concat_audio_df],
+        ["fusion", "concat", "fusion_audio", "concat_audio"],
+    )
+    results = utils.extract_dialogue_information(results)
+
+    return results
+
+
+df = get_result_dataframe(DATASET)
+df.head(3)
+```
+
+```{python}
+labels = df["target"].value_counts().index.to_list()
+labels
+```
+
+```{python}
+from functools import partial
+
+
+iemocap_positive_emotions = ["happy", "excited"]
+iemocap_negative_emotions = ["angry", "sad", "frustrated"]
+
+
+iemocap_classify_sentiment = partial(
+    utils.classify_sentiment,
+    positive=iemocap_positive_emotions,
+    negative=iemocap_negative_emotions,
+)
+
+df["emotion_sentiment"] = df["target"].apply(iemocap_classify_sentiment)
+df_long = df.melt(
+    id_vars=["emotion_sentiment", "target", "utterance"],
+    value_vars=["output", "output_concat"],
+    var_name="source",
+    value_name="output_long",
+)
+df_long["emotion_sentiment_prediction"] = df_long["output_long"].apply(
+    iemocap_classify_sentiment
+)
+
+
+utils.print_confusion_matrix(
+    df_long,
+    target_labels=["positive", "negative"],
+    output_column="emotion_sentiment_prediction",
+    target_column="emotion_sentiment",
+    xlab_name="Predicted Sentiment",
+    ylab_name="True Sentiment",
+    text_size=28,
+    label_scaling_adjustment=4,
+    name="images/sentiment_iemocap_cm.png",
+)
+```
+
+```{python}
+utils.print_confusion_matrix(
+    df_long,
+    target_labels=iemocap_negative_emotions,
+    output_column="output_long",
+    target_column="target",
+    text_size=20,
+    label_scaling_adjustment=2,
+    name="images/negative_iemocap_cm.png",
+)
+```
+
+```{python}
+utils.print_confusion_matrix(
+    df_long,
+    target_labels=iemocap_positive_emotions,
+    output_column="output_long",
+    target_column="target",
+    text_size=28,
+    label_scaling_adjustment=4,
+    name="images/positive_iemocap_cm.png",
+)
+```
+
+## Audio
+
+```{python}
+df_long_audio = df.melt(
+    id_vars=["emotion_sentiment", "target", "utterance"],
+    value_vars=["output_fusion_audio", "output_concat_audio"],
+    var_name="source",
+    value_name="output_long",
+)
+df_long_audio
+```
+
+```{python}
+utils.print_confusion_matrix(
+    df_long_audio,
+    target_labels=labels[::-1],
+    output_column="output_long",
+    target_column="target",
+)
+```
+
+```{python}
+fusion_model = df["target"] == df["output"] 
+concat_model = df["target"] == df["output_concat"]  
+
+# Define negations
+not_fusion_model = ~fusion_model
+not_concat_model = ~concat_model
+```
+
+```{python}
+utils.print_confusion_matrix_difference(df, target_labels=labels[::-1], output_column1="output", output_column2="output_concat", name = "images/discussion_iemocap_diff_cm.png", title="Confusion Matrix difference on IEMOCAP")
+```
+
+```{python}
+def iou(df, label):
+    diff = len(df[(df["target"] == label) & (df["output"] == label)]) - len(df[(df["target"] == label) & (df["output_concat"] == label)])
+    inter = df[(df["target"] == label) & (df["output"] == label)].index.intersection(df[(df["target"] == label) & (df["output_concat"] == label)].index)
+    union = df[(df["target"] == label) & (df["output"] == label)].index.union(df[(df["target"] == label) & (df["output_concat"] == label)].index)
+    return float(len(inter) / (len(union) - abs(diff)))
+
+for label in labels:
+    print(label, f"{iou(df, label):.2f}")
+```
+```{r}
+print_venn <- function(true_label, pred_label = true_label) {
+    l <- list(
+        Fusion = rownames(filter(py$df, target == true_label, output == pred_label)), 
+        Concat = rownames(filter(py$df, target == true_label, output_concat == pred_label))
+        # All = rownames(filter(py$df, target == true_label))
+    )
+    ggVennDiagram(l) +
+        scale_x_continuous(expand = expansion(mult = 0.2)) +
+        ggtitle(true_label)
+}
+
+
+for (label in py$labels) {
+    print(print_venn(label))
+}
+
+
+```
+
+
+
+```{python}
+from sklearn.metrics import precision_score, recall_score, f1_score
+
+for label in labels:
+    y_true = df["target"].apply(lambda x: 1 if x == label else 0)
+    y_pred_fusion = df["output"].apply(lambda x: 1 if x == label else 0)
+    y_pred_concat = df["output_concat"].apply(lambda x: 1 if x == label else 0)
+
+    pre_label = precision_score(y_true, y_pred_fusion) * 100
+    rec_label = recall_score(y_true, y_pred_fusion) * 100
+    pre_label_ierc = precision_score(y_true, y_pred_concat) * 100
+    rec_label_ierc = recall_score(y_true, y_pred_concat) * 100
+    f1_fusion = f1_score(y_true, y_pred_fusion) * 100
+    f1_concat = f1_score(y_true, y_pred_concat) * 100
+    
+    print(f"F1-score\t für Label {label}: Fusion: {f1_fusion:.2f} - Concat: {f1_concat:.2f} - Different: {(f1_fusion - f1_concat):.2f}")
+    print(f"Precision\t für Label {label}: Fusion: {pre_label:.2f} - Concat: {pre_label_ierc:.2f} - Differenz: {(pre_label - pre_label_ierc):.2f}")
+    print(f"Recall\t\t für Label {label}: Fusion: {rec_label:.2f} - Concat: {rec_label_ierc:.2f} - Differenz: {(rec_label - rec_label_ierc):.2f}")
+    print()
+```
+
+### Weitere Statistiken
+Hier werden weitere Statistiken genannt, wie das Klassifizierungsverhalten der einzelnen Teilmodelle ist.
+Es wurden einmal die Ergebnisse von InstructERC, dem Late-Fusion Modell audio output, und dem kombinierten Modell berechnet
+
+```{python}
+# 2. late-fusion Model (F)
+df_F = df[fusion_model]
+print(f"In total, {len(df_F)} samples were recognized by the late-fusion model.")
+
+# 3. concat Model (C)
+df_C = df[concat_model]
+print(f"In total, {len(df_C)} samples were recognized by the concat model.")
+
+
+# 5. NOT late-fusion Model (¬F)
+df_not_F = df[not_fusion_model]
+print(f"In total, {len(df_not_F)} samples were NOT recognized by the late-fusion model.")
+
+# 6. NOT concat Model (¬C)
+df_not_C = df[not_concat_model]
+print(f"In total, {len(df_not_C)} samples were NOT recognized by the concat model.")
+
+
+# 9. late-fusion AND concat Models (F ∧ C)
+df_F_and_C = df[fusion_model & concat_model]
+print(f"In total, {len(df_F_and_C)} samples were recognized by both the late-fusion and concat models.")
+
+
+# 13. late-fusion AND NOT concat Models (F ∧ ¬C)
+df_F_and_not_C = df[fusion_model & not_concat_model]
+print(f"In total, {len(df_F_and_not_C)} samples were recognized by the late-fusion model but NOT by the concat model.")
+
+
+# 15. concat AND NOT late-fusion Models (C ∧ ¬F)
+df_C_and_not_F = df[concat_model & not_fusion_model]
+print(f"In total, {len(df_C_and_not_F)} samples were recognized by the concat model but NOT by the late-fusion model.")
+
+
+# 18. NOT late-fusion AND NOT concat Models (¬F ∧ ¬C)
+df_not_F_and_not_C = df[not_fusion_model & not_concat_model]
+print(f"In total, {len(df_not_F_and_not_C)} samples were NOT recognized by both the late-fusion and concat models.")
+```
+
+
+```{r}
+
+```
+
+

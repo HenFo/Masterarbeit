@@ -170,7 +170,8 @@ def print_confusion_matrix(
     ylab_name: str = "True Emotion",
     text_size: float = 12,
     label_scaling_adjustment: float = 0,
-    name: str | None = None
+    name: str | None = None,
+    show_percentage: bool = True,
 ) -> None:
     target_labels = (
         results[target_column].unique() if target_labels is None else target_labels
@@ -187,8 +188,11 @@ def print_confusion_matrix(
 
     cm_melted["fraction"] = (cm_melted["count"] / cm_melted["total_count"]).round(2)
     cm_melted["label"] = (
-        cm_melted["count"].astype(str) + "\n" + (cm_melted["fraction"]*100).astype(int).astype(str) + "%"
+        cm_melted["count"].astype(str)
     )
+
+    if show_percentage:
+        cm_melted["label"] = cm_melted["label"] + "\n" + (cm_melted["fraction"]*100).astype(int).astype(str) + "%"
 
     cm_melted["p_group"] = cm_melted["fraction"].apply(
         lambda x: "high" if x > 0.5 else "low"
